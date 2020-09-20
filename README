@@ -1,0 +1,112 @@
+F-35 NOZZLE
+Copyright (C) 2020 Adam Williams <broadcast at earthling dot net>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 2 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+
+
+
+What you'll find here:
+
+nozzle.pcb - layout of the electronicals
+nozzle.X - firmware for the electronicals
+
+final.FCStd - latest tubes.  
+    Everything else except where motors attach to tubes is outdated.
+motor.FCStd - latest motor parts
+base.FCStd - base + electronical platform
+bearing.FCStd - latest bearing parts
+
+tube.c - generate isogrid tubes
+exit.c - generate the exit nozzle
+3dstuff.h - common 3D functions
+
+
+
+This design used leftover motors without encoders from polulu.  An
+easier design would use gearmotors with built in encoders from
+adafruit.com.  Lighter motors are better.  100:1 or more is better.
+
+The base doesn't support it when it's sideways.  It needs a metal tube
+inside the 1st isogrid to point sideways.
+
+Parts must be exported in STL format from a bunch of places.
+Print small parts 1st to test fit.
+The latest versions of each part are listed here.
+Only use raft with 2mm margin + support touching base when necessary.
+25% infill
+Tube sections have a convex overhang on 1 end to avoid support.
+    That must be printed on top.
+
+standalone motor parts:
+     - print with no raft
+     - 50% infill
+     - Support must be everywhere instead of just touching base
+    motor.FCStd
+        pinion
+        top platform
+        strap
+         - Print the laminations perpendicular to the motor axis
+
+
+tubes with motor parts:
+    final.FCStd
+        inlet
+        elbows
+        oblique or straight bottom base depending on the tube section
+        tube section
+         - Tubes must be printed with the tapered overhang on top.
+         - Print with a brim & support to aid the 1mm alignment rings
+        cable guards
+         - Only needed for 2 motors.
+         - hot glued on
+         - Print the laminations perpendicular to the motor axis
+         - use a brim to aid separating the support
+
+bare tubes:
+    final.FCStd
+        elbow
+        exit elbow
+        - Print with a brim & support to aid the 1mm alignment rings
+        
+exit nozzle:
+    exit
+    - print with support & brim to aid the chevrons
+
+bearing parts:
+     - print with no raft or support to get flat sides
+    bearing.FCStd
+        split mane gear with 2 different gear splitters to get 2 halves
+        bearing inner
+        bearing outer
+
+base:
+    no support
+    skirt adhesion
+    base.FCStd
+        base
+        electronicals + screw holes
+
+
+
+
+
+
+
+
+
+
+
+

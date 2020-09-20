@@ -1,0 +1,12 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: /amazon2/root/nozzle/export_strap.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+import Mesh
+
+__objs__=[]
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Cut004"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Cut007"))
+Mesh.export(__objs__,u"/amazon2/root/nozzle/strap.stl")
+
+del __objs__

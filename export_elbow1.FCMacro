@@ -1,0 +1,17 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: /amazon2/root/nozzle/export_elbow1.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+import Mesh
+
+__objs__=[]
+__objs__.append(FreeCAD.getDocument("final").getObject("Part025"))
+__objs__.append(FreeCAD.getDocument("final").getObject("Cut062"))
+Mesh.export(__objs__,u"/amazon2/root/nozzle/elbow1.stl")
+
+del __objs__
+#Gui.getDocument("final").getObject("Part063").Visibility=False
+#Gui.getDocument("final").getObject("Part063").Visibility=True
+#Gui.getDocument("final").getObject("Part063").Visibility=False
+#Gui.getDocument("final").getObject("Part063").Visibility=True
+# Macro End: /amazon2/root/nozzle/export_elbow1.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++

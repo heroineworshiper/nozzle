@@ -1,0 +1,271 @@
+# Synthesize lattice tubes
+
+
+import FreeCAD
+import math
+import Draft
+import Part
+import collections
+
+# mm
+RADIUS = 50.0
+THICKNESS = 2
+LENGTH = 100
+SLICES = 10
+# multiple of 2 per slice
+SEGMENTS = 20
+RIB_WIDTH = 1.0
+RIB_DEPTH = 2.0
+#RIB_DIVISIONS = 5
+RIB_DIVISIONS = 1
+THICKNESS = 1.0
+
+# arrays of points of all tube segments
+# points are in polar coordinates
+slices = []
+doc = App.activeDocument()
+
+
+def toRad(angle):
+    return angle * math.pi * 2.0 / 360.0
+
+def polarToXYZ(angle, radius, z):
+    x = radius * math.cos(angle)
+    y = -radius * math.sin(angle)
+    return Draft.Vector(x, y, z)
+
+def XYZToPolar(xyz):
+    angle = math.atan2(-xyz.y, xyz.x)
+    radius = math.hypot(xyz.x, xyz.y)
+    return Draft.Vector(angle, radius, xyz.z)
+
+# join 2 points on a cylinder with a solid tube
+# points are polar coords
+def makeCylinderLine(start, end, divisions, ribWidth, ribDepth):
+    faces = []
+    depthVector = Draft.Vector(0, ribDepth)
+    for i in range(0, divisions):
+        center1 = start + (end - start) * i / divisions
+        center2 = start + (end - start) * (i + 1) / divisions
+        # get perpendicular vector on the surface of the cylinder
+        diff = center2 - center1
+        # get perpendicular vector in mm
+        perpX = diff.z
+        perpZ = math.sin(diff.x) * RADIUS
+        perpMag = math.hypot(perpX, perpZ)
+        perpX = perpX / perpMag * ribWidth / 2
+        perpZ = perpZ / perpMag * ribWidth / 2
+        # get perpendicular vector in polar coords
+        perpVector = Draft.Vector(-math.asin(perpX / RADIUS), 0, perpZ)
+        
+        
+        if i == 0:
+            point0 = center1 - perpVector
+            point1 = center1 - perpVector + depthVector
+            point2 = center1 + perpVector + depthVector
+            point3 = center1 + perpVector
+            points = [ polarToXYZ(point0.x, point0.y, point0.z),
+                polarToXYZ(point1.x, point1.y, point1.z),
+                polarToXYZ(point2.x, point2.y, point2.z),
+                polarToXYZ(point3.x, point3.y, point3.z) ]
+            faces.append(Draft.makeWire(points, closed=True, face=False))
+
+        point0 = center2 - perpVector
+        point1 = center2 - perpVector + depthVector
+        point2 = center2 + perpVector + depthVector
+        point3 = center2 + perpVector
+        points = [polarToXYZ(point0.x, point0.y, point0.z),
+            polarToXYZ(point1.x, point1.y, point1.z),
+            polarToXYZ(point2.x, point2.y, point2.z),
+            polarToXYZ(point3.x, point3.y, point3.z) ]
+        faces.append(Draft.makeWire(points, closed=True, face=False))
+
+    loft = doc.addObject('Part::Loft','Loft')
+    loft.Sections = faces
+    loft.Solid = True
+    loft.Ruled = True
+    loft.Closed = False
+
+
+#    App.activeDocument().recompute()
+#    obj=Draft.clone(loft)
+#    FreeCAD.ActiveDocument.removeObject(loft.Name)
+#    for i in faces:
+#        FreeCAD.ActiveDocument.removeObject(i.Name)
+
+#    return obj      
+    return loft
+
+
+def makeIsogrid():
+    # create points defining the tube
+    # divide tube into slices
+    for slice in range(0, SLICES + 1):
+        z = slice * LENGTH / SLICES
+        segments = []
+        # for each slice, we have a number of segments + 1 overlapping point
+        for segment in range(0, SEGMENTS + 1):
+            angle = toRad(segment * 360 / SEGMENTS)
+            point = Draft.Vector(angle, RADIUS, z)
+            segments.append(point)
+        slices.append(segments)
+
+    objects = []
+
+    # create longerons
+    if True:
+        print('Longerons')
+        for slice in range(0, SLICES):
+#        for slice in range(0, 1):
+            for segment in range(0, SEGMENTS):
+                print('slice=', slice, ' segment=', segment)
+                point0 = slices[slice][segment]
+                point1 = slices[slice + 1][segment]
+                obj = makeCylinderLine(point0, point1, 1, RIB_WIDTH, RIB_DEPTH)
+                objects.append(obj)
+
+    # create diagonals
+    if True:
+        print('Diagonals')
+        for slice in range(0, SLICES):
+#        for slice in range(0, 1):
+            slice1 = slice
+            slice2 = slice + 1
+            segment = 0
+            while segment < SEGMENTS:
+                print('slice=', slice, ' segment=', segment)
+                segment1 = segment
+                segment2 = segment + 1
+                segment3 = segment + 2
+                segment += 2
+
+                if (slice % 2) == 0:
+                    point0 = slices[slice1][segment1]
+                    point1 = slices[slice2][segment2]
+                    point2 = slices[slice1][segment3]
+                    obj = makeCylinderLine(point0, point1, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                    objects.append(obj)
+                    obj = makeCylinderLine(point1, point2, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                    objects.append(obj)
+                else:
+                    point0 = slices[slice2][segment1]
+                    point1 = slices[slice1][segment2]
+                    point2 = slices[slice2][segment3]
+                    obj = makeCylinderLine(point0, point1, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                    objects.append(obj)
+                    obj = makeCylinderLine(point1, point2, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                    objects.append(obj)
+
+#    print('Fusing')
+#    fusion = App.activeDocument().addObject("Part::MultiFuse","Fusion")
+#    fusion.Shapes = objects
+    return objects
+
+def makeOval(radius, z):
+    i = 0.0
+    step = 5.0
+    points = []
+    while i < 360.0:
+        points.append(polarToXYZ(toRad(i), radius, z))
+        i += step
+    return Draft.makeWire(points, closed=True, face=False)
+    
+
+
+def makeTube():
+    line1 = makeOval(RADIUS, 0)
+    line2 = makeOval(RADIUS, LENGTH)
+
+    line3 = makeOval(RADIUS + THICKNESS, 0)
+    line4 = makeOval(RADIUS + THICKNESS, LENGTH)
+
+    loft1 = doc.addObject('Part::Loft','Loft')
+    loft1.Sections = [line1, line2]
+    loft1.Solid = True
+    loft1.Ruled = True
+    loft1.Closed = False
+
+    loft2 = doc.addObject('Part::Loft','Loft')
+    loft2.Sections = [line3, line4]
+    loft2.Solid = True
+    loft2.Ruled = True
+    loft2.Closed = False
+
+    tube = App.activeDocument().addObject("Part::Cut","Cut")
+    App.activeDocument().Cut.Base = loft2
+    App.activeDocument().Cut.Tool = loft1
+    
+#    App.activeDocument().recompute()
+#    obj = Draft.clone(tube)
+#    FreeCAD.ActiveDocument.removeObject(tube.Name)
+#    FreeCAD.ActiveDocument.removeObject(loft1.Name)
+#    FreeCAD.ActiveDocument.removeObject(loft2.Name)
+#    FreeCAD.ActiveDocument.removeObject(line1.Name)
+#    FreeCAD.ActiveDocument.removeObject(line2.Name)
+#    FreeCAD.ActiveDocument.removeObject(line3.Name)
+#    FreeCAD.ActiveDocument.removeObject(line4.Name)
+
+#    return obj
+    return tube
+
+# cutting object
+def makeCube():
+    cube = App.ActiveDocument.addObject("Part::Box","Box")
+    cube.Length = '200 mm'
+    cube.Width = '200 mm'
+    cube.Height = '100 mm'
+    cube.Placement = App.Placement(
+        App.Vector(-cube.Length / 2, -cube.Width / 2, LENGTH),
+        App.Rotation(App.Vector(0, 1, 0), 22.5))
+    return cube
+
+def trim(object, cutter):
+    dst = App.activeDocument().addObject("Part::Cut","Cut")
+    dst.Base = object
+    dst.Tool = cutter
+    return dst
+
+
+# disable recomputes
+App.ActiveDocument.RecomputesFrozen = True
+isogrid = makeIsogrid()
+tube = makeTube()
+
+cube = makeCube()
+#print ('Boolean tube')
+#cube = makeCube()
+#trim(tube, cube)
+
+#for i in isogrid:
+#    print ('Boolean object=', i.Name)
+#    cube = makeCube()
+#    trim(i, cube)
+
+
+
+#print('Fusing')
+#fusion = App.activeDocument().addObject("Part::MultiFuse","Fusion")
+#fusion.Shapes = objects
+
+#cut = App.activeDocument().addObject("Part::Cut","Cut")
+#cut.Base = fusion
+#cut.Tool = cube
+#Gui.activeDocument().hide(fusion.Name)
+#Gui.activeDocument().hide(cube.Name)
+
+
+
+#for i in isogrid:
+#    print ('isogrid=', i.Name)
+#    cube2 = Draft.clone(cube)
+#    App.activeDocument().addObject("Part::Cut","Cut")
+#    App.activeDocument().Cut.Base = i
+#    App.activeDocument().Cut.Tool = cube2
+#    Gui.activeDocument().hide(i.Name)
+#    Gui.activeDocument().hide(cube2.Name)
+
+
+
+
+
+

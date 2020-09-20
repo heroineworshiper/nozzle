@@ -1,0 +1,672 @@
+// synthesize an isogrid tube & write to an STL file
+// gcc -o tube tube.c -lm;./tube
+
+
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+typedef struct {
+	double x,y,z;
+} vector;
+
+#define FILENAME "tube.stl"
+
+// mm
+// cylinder dimensions
+#define RADIUS 50.0
+#define THICKNESS 1.0
+// must be a multiple of SLICE_LENGTH
+#define LENGTH 100.0
+
+#define SKIRT_LENGTH 2.0
+
+// isogrid dimensions
+#define SLICE_LENGTH 10.0
+#define SLICES ((int)(LENGTH / SLICE_LENGTH))
+
+// multiple of 2 per slice
+#define ISOGRID_SEGMENTS 20
+#define RIB_WIDTH 1.0
+#define RIB_DEPTH 2.0
+//#define RIB_DIVISIONS 5
+#define RIB_DIVISIONS 1
+
+#define TUBE_SEGMENTS (360 / 5)
+// print only a slice of the tube by changing these
+//#define USE_CLIPPING
+    #define MIN_ANGLE 103
+    #define MAX_ANGLE 143
+    #define MIN_Z 0
+    #define MAX_Z 30
+
+// clipping plane angle in degrees
+#define PLANE_ANGLE -22.5
+
+
+FILE *out;
+int countOffset = 0;
+int triangleCount = 0;
+
+// calculated values
+double topAspect = 1.0;
+double planeSlope = 0.0;
+double planeIntercept = 0.0;
+vector planeNormal;
+vector planePoint;
+
+double toRad(double angle)
+{
+    return angle * M_PI * 2.0 / 360.0;
+}
+
+vector polarToXYZ(double angle, double radius, double z)
+{
+    double x = radius * cos(angle);
+    double y = -radius * sin(angle);
+    double fraction = z / LENGTH;
+    double aspect = (topAspect * fraction) + (1.0 - fraction);
+    x = x * aspect;
+    return (vector){ x, y, z };
+}
+
+
+vector polarToXYZ2(vector point)
+{
+    double angle = point.x;
+    double radius = point.y;
+    double z = point.z;
+    return polarToXYZ(angle, radius, z);
+}
+
+vector XYZToPolar(vector xyz)
+{
+    double fraction = xyz.z / LENGTH;
+    double aspect = (topAspect * fraction) + (1.0 - fraction);
+    xyz.x = xyz.x / aspect;
+    double angle = atan2(-xyz.y, xyz.x);
+    double radius = hypot(xyz.x, xyz.y);
+    return (vector){ angle, radius, xyz.z };
+}
+
+vector addVectors(vector a, vector b)
+{
+	return (vector){ a.x + b.x, a.y + b.y, a.z + b.z };
+}
+ 
+vector subVectors(vector a, vector b)
+{
+	return (vector){ a.x - b.x, a.y - b.y, a.z - b.z };
+}
+
+vector crossProduct(vector a, vector b)
+{
+    vector result;
+	result.x = a.y * b.z - a.z * b.y;
+	result.y = a.z * b.x - a.x * b.z;
+	result.z = a.x * b.y - a.y * b.x;
+    return result;
+}
+
+double magnitude(vector a)
+{
+    return sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+}
+
+vector normalize(vector a)
+{
+    double m = magnitude(a);
+    return (vector){ a.x / m, a.y / m, a.z / m };
+}
+
+double dotProduct(vector a, vector b)
+{
+	return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+vector scaleVector(double l, vector a)
+{
+	return (vector){ l * a.x, l * a.y, l * a.z };
+}
+ 
+vector intersectionPoint(vector lineVector, 
+    vector linePoint, 
+    vector planeNormal, 
+    vector planePoint)
+{
+	vector diff = subVectors(linePoint,planePoint);
+ 
+	return addVectors(addVectors(diff,planePoint),
+        scaleVector(
+            -dotProduct(diff,planeNormal) / 
+                dotProduct(lineVector,planeNormal),
+            lineVector));
+}
+
+// does the line intersect the plane?
+int intersect(vector lineVector, vector planeNormal)
+{
+    if(dotProduct(lineVector, planeNormal) == 0)
+    {
+        return 0;
+    }
+    else
+    {
+        return 1;
+    }
+}
+
+void writeInt32(int x)
+{
+    fwrite(&x, 1, sizeof(int), out);
+}
+
+void writeFloat(float x)
+{
+    fwrite(&x, 1, sizeof(float), out);
+}
+
+// clip line in polar coordinates to the clipping plane
+// returns 1 if the entire line is above the plane
+int clipLine(vector *point1, vector *point2)
+{
+    vector xyz1 = polarToXYZ2(*point1);
+    vector xyz2 = polarToXYZ2(*point2);
+
+    double planeZ1 = planeIntercept + xyz1.x * planeSlope;
+    double planeZ2 = planeIntercept + xyz2.x * planeSlope;
+
+#ifdef USE_CLIPPING
+    planeZ1 = MAX_Z;
+    planeZ2 = MAX_Z;
+
+    if(point1->x < toRad(MIN_ANGLE) || point1->x >= toRad(MAX_ANGLE) ||
+        point2->x < toRad(MIN_ANGLE) || point2->x >= toRad(MAX_ANGLE))
+    {
+        return 1;
+    }
+
+#endif // USE_CLIPPING
+
+    if(xyz1.z > planeZ1 && xyz2.z > planeZ2)
+    {
+        return 1;
+    }
+
+    if(xyz1.z > planeZ1)
+    {
+        if(abs(xyz2.x - xyz1.x) < 0.01)
+        {    
+            // vertical line
+            point1->z = planeZ1;
+        }
+        else
+        {
+            // intersection between line & plane
+#ifdef USE_CLIPPING
+            vector intersection = intersectionPoint(
+                subVectors(xyz2, xyz1), 
+                xyz1, 
+                (vector){ 0.0, 0.0, 1.0 }, 
+                (vector){ 0.0, 0.0, MAX_Z });
+#else
+            vector intersection = intersectionPoint(
+                subVectors(xyz2, xyz1), 
+                xyz1, 
+                planeNormal, 
+                planePoint);
+#endif
+
+            *point1 = XYZToPolar(intersection);
+        }
+    }
+
+    if(xyz2.z > planeZ2)
+    {
+        if(abs(xyz2.x - xyz1.x) < 0.01)
+        {
+            // vertical line
+            point2->z = planeZ2;
+        }
+        else
+        {
+            // intersection between line & plane
+#ifdef USE_CLIPPING
+            vector intersection = intersectionPoint(
+                subVectors(xyz2, xyz1), 
+                xyz2, 
+                (vector){ 0.0, 0.0, 1.0 }, 
+                (vector){ 0.0, 0.0, MAX_Z });
+#else
+            vector intersection = intersectionPoint(
+                subVectors(xyz2, xyz1), 
+                xyz1, 
+                planeNormal, 
+                planePoint);
+#endif
+            *point2 = XYZToPolar(intersection);
+        }
+    }
+
+    return 0;
+}
+
+
+void writeTriangle(vector coord0, vector coord1, vector coord2)
+{
+// normal
+    vector n = crossProduct(subVectors(coord1, coord0),
+        subVectors(coord2, coord1));
+    if(magnitude(n) > 0)
+    {
+        n = normalize(n);
+    }
+    
+    writeFloat(n.x);
+    writeFloat(n.y);
+    writeFloat(n.z);
+
+// vertex
+    writeFloat(coord0.x);
+    writeFloat(coord0.y);
+    writeFloat(coord0.z);
+// vertex
+    writeFloat(coord1.x);
+    writeFloat(coord1.y);
+    writeFloat(coord1.z);
+// vertex
+    writeFloat(coord2.x);
+    writeFloat(coord2.y);
+    writeFloat(coord2.z);
+
+// attribute
+    uint16_t x = 0;
+    fwrite(&x, 1, 2, out);
+    
+    triangleCount++;
+}
+
+void writeQuad(vector coord0, vector coord1, vector coord2, vector coord3)
+{
+    writeTriangle(coord0, coord1, coord2);
+    writeTriangle(coord0, coord2, coord3);
+}
+
+void loftQuads(vector *topCoords, vector *bottomCoords)
+{
+    int i;   
+    for(i = 0; i < 4; i++)
+    {
+        if(isnan(topCoords[i].x) ||
+            isnan(topCoords[i].y) ||
+            isnan(topCoords[i].z) ||
+            isnan(bottomCoords[i].x) ||
+            isnan(bottomCoords[i].y) ||
+            isnan(bottomCoords[i].z))
+        {
+            printf("loftQuads %d: Nan at triangle %d\n", __LINE__, triangleCount);
+            return;
+        }
+    }
+
+// if(triangleCount < 84)
+// {
+//     printf("loftQuads %d: top:%f,%f,%f %f,%f,%f %f,%f,%f %f,%f,%f\n",
+//         __LINE__,
+//         topCoords[0].x,
+//         topCoords[0].y,
+//         topCoords[0].z,
+//         topCoords[1].x,
+//         topCoords[1].y,
+//         topCoords[1].z,
+//         topCoords[2].x,
+//         topCoords[2].y,
+//         topCoords[2].z,
+//         topCoords[3].x,
+//         topCoords[3].y,
+//         topCoords[3].z);
+//     printf("loftQuads %d: bottom:%f,%f,%f %f,%f,%f %f,%f,%f %f,%f,%f\n",
+//         __LINE__,
+//         bottomCoords[0].x,
+//         bottomCoords[0].y,
+//         bottomCoords[0].z,
+//         bottomCoords[1].x,
+//         bottomCoords[1].y,
+//         bottomCoords[1].z,
+//         bottomCoords[2].x,
+//         bottomCoords[2].y,
+//         bottomCoords[2].z,
+//         bottomCoords[3].x,
+//         bottomCoords[3].y,
+//         bottomCoords[3].z);
+// }
+
+// top
+    writeQuad(topCoords[3], topCoords[2], topCoords[1], topCoords[0]);
+
+// sides
+    writeQuad(topCoords[0], topCoords[1], bottomCoords[1], bottomCoords[0]);
+    writeQuad(topCoords[1], topCoords[2], bottomCoords[2], bottomCoords[1]);
+    writeQuad(topCoords[2], topCoords[3], bottomCoords[3], bottomCoords[2]);
+    writeQuad(topCoords[3], topCoords[0], bottomCoords[0], bottomCoords[3]);
+
+// bottom
+    writeQuad(bottomCoords[0], bottomCoords[1], bottomCoords[2], bottomCoords[3]);
+}
+
+
+// join 2 points on a cylinder with a solid tube
+// points are polar coords
+void makeRib(vector start, 
+    vector end, 
+    int divisions, 
+    int ribWidth, 
+    int ribDepth)
+{
+    vector depthVector = (vector){ 0, ribDepth, 0.0 };
+    vector directionVector = subVectors(end, start);
+    int i;
+    for(i = 0; i < divisions; i++)
+    {
+        vector center1 = addVectors(start, 
+            scaleVector((double)i / divisions, directionVector));
+        vector center2 = addVectors(start, 
+            scaleVector((double)(i + 1) / divisions, directionVector));
+        if(!clipLine(&center1, &center2))
+        {
+            // get perpendicular vector on the surface of the cylinder
+            vector diff = subVectors(center2, center1);
+            // get perpendicular vector in mm
+            double perpX = diff.z;
+            double perpZ = sin(diff.x) * RADIUS;
+            double perpMag = hypot(perpX, perpZ);
+            perpX = perpX / perpMag * ribWidth / 2;
+            perpZ = perpZ / perpMag * ribWidth / 2;
+            // get perpendicular vector in polar coords
+            vector perpVector = (vector){ -asin(perpX / RADIUS), 0, perpZ };
+
+
+            vector point0 = subVectors(center1, perpVector);
+            vector point1 = addVectors(subVectors(center1, perpVector), depthVector);
+            vector point2 = addVectors(addVectors(center1, perpVector), depthVector);
+            vector point3 = addVectors(center1, perpVector);
+            vector points1[] = {
+                polarToXYZ2(point0),
+                polarToXYZ2(point1),
+                polarToXYZ2(point2),
+                polarToXYZ2(point3)
+            };
+
+            point0 = subVectors(center2, perpVector);
+            point1 = addVectors(subVectors(center2, perpVector), depthVector);
+            point2 = addVectors(addVectors(center2, perpVector), depthVector);
+            point3 = addVectors(center2, perpVector);
+            vector points2[] = {
+                polarToXYZ2(point0),
+                polarToXYZ2(point1),
+                polarToXYZ2(point2),
+                polarToXYZ2(point3) 
+            };
+
+            loftQuads(points1, points2);
+        }
+    }
+}
+
+
+void makeIsogrid()
+{
+// create points defining the tube
+// divide tube into slices
+    vector *slices[SLICES + 1];
+    int slice;
+    for(slice = 0; slice < SLICES + 1; slice++)
+    {
+        double z = slice * LENGTH / SLICES;
+        vector *segments = calloc(sizeof(vector), ISOGRID_SEGMENTS + 1);
+        
+        // for each slice, we have a number of ISOGRID_SEGMENTS + 1 overlapping point
+        int segment;
+        for(segment = 0; segment < ISOGRID_SEGMENTS + 1; segment++)
+        {
+            double angle = toRad((double)segment * 360 / ISOGRID_SEGMENTS);
+            vector point = { angle, RADIUS, z };
+            segments[segment] = point;
+        }
+        
+        slices[slice] = segments;
+    }
+
+// create longerons
+//    printf("makeIsogrid %d: Longerons\n", __LINE__);
+    for(slice = 0; slice < SLICES; slice++)
+    {
+        int segment;
+        for(segment = 0; segment < ISOGRID_SEGMENTS; segment++)
+        {
+//             printf("makeIsogrid %d: slice=%d segment=%d\n",
+//                 __LINE__,
+//                 slice, 
+//                 segment);
+            vector point0 = slices[slice][segment];
+            vector point1 = slices[slice + 1][segment];
+            
+            makeRib(point0, 
+                point1, 
+                1, 
+                RIB_WIDTH, 
+                RIB_DEPTH);
+        }
+    }
+
+// create diagonals
+//    printf("makeIsogrid %d: Diagonals\n", __LINE__);
+    for(slice = 0; slice < SLICES; slice++)
+    {
+        int slice1 = slice;
+        int slice2 = slice + 1;
+        int segment;
+        for(segment = 0; segment < ISOGRID_SEGMENTS; segment += 2)
+        {
+//             printf("makeIsogrid %d: slice=%d segment=%d\n",
+//                 __LINE__,
+//                 slice, 
+//                 segment);
+            int segment1 = segment;
+            int segment2 = segment + 1;
+            int segment3 = segment + 2;
+
+            if((slice % 2) == 0)
+            {
+                vector point0 = slices[slice1][segment1];
+                vector point1 = slices[slice2][segment2];
+                vector point2 = slices[slice1][segment3];
+                makeRib(point0, point1, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH);
+                makeRib(point1, point2, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH);
+            }
+            else
+            {
+                vector point0 = slices[slice2][segment1];
+                vector point1 = slices[slice1][segment2];
+                vector point2 = slices[slice2][segment3];
+                makeRib(point0, point1, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH);
+                makeRib(point1, point2, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH);
+            }
+        }
+    }
+
+    for(slice = 0; slice < SLICES + 1; slice++)
+    {
+        free(slices[slice]);
+    }
+}
+
+
+
+void makeTube()
+{
+    double i = 0.0;
+    double step = 360.0 / TUBE_SEGMENTS;
+    for(i = 0; i < 360.0; i += step)
+    {
+        // cylinder coords
+        vector topPoint1 = (vector){ toRad(i), RADIUS, LENGTH };
+        vector bottomPoint1 = (vector){ toRad(i), RADIUS, 0 };
+        if(clipLine(&bottomPoint1, &topPoint1))
+        {
+            continue;
+        }
+
+        vector topPoint2 = (vector){ toRad(i + step), RADIUS, LENGTH };
+        vector bottomPoint2 = (vector){ toRad(i + step), RADIUS, 0 };
+        if(clipLine(&bottomPoint2, &topPoint2))
+        {
+            continue;
+        }
+
+        vector topPoint3 = (vector){ toRad(i + step), RADIUS + THICKNESS, LENGTH };
+        vector bottomPoint3 = (vector){ toRad(i + step), RADIUS + THICKNESS, 0 };
+        if(clipLine(&bottomPoint3, &topPoint3))
+        {
+            continue;
+        }
+
+        vector topPoint4 = (vector){ toRad(i), RADIUS + THICKNESS, LENGTH };
+        vector bottomPoint4 = (vector){ toRad(i), RADIUS + THICKNESS, 0 };
+        if(clipLine(&bottomPoint4, &topPoint4))
+        {
+            continue;
+        }
+
+        vector topXYZ1 = polarToXYZ2(topPoint1);
+        vector topXYZ2 = polarToXYZ2(topPoint2);
+        vector topXYZ3 = polarToXYZ2(topPoint3);
+        vector topXYZ4 = polarToXYZ2(topPoint4);
+        vector bottomXYZ1 = polarToXYZ2(bottomPoint1);
+        vector bottomXYZ2 = polarToXYZ2(bottomPoint2);
+        vector bottomXYZ3 = polarToXYZ2(bottomPoint3);
+        vector bottomXYZ4 = polarToXYZ2(bottomPoint4);
+
+        loftQuads((vector[]){ topXYZ4, topXYZ3, topXYZ2, topXYZ1 }, 
+            (vector[]){ bottomXYZ4, bottomXYZ3, bottomXYZ2, bottomXYZ1 });
+
+        
+        // skirt points
+        vector skirtOffset = { 0.0, 0.0, SKIRT_LENGTH / 2 };
+
+        topPoint3 = (vector){ toRad(i + step), RADIUS + RIB_DEPTH, LENGTH };
+        bottomPoint3 = (vector){ toRad(i + step), RADIUS + RIB_DEPTH, 0 };
+        if(clipLine(&bottomPoint3, &topPoint3))
+        {
+            continue;
+        }
+
+        topPoint4 = (vector){ toRad(i), RADIUS + RIB_DEPTH, LENGTH };
+        bottomPoint4 = (vector){ toRad(i), RADIUS + RIB_DEPTH, 0 };
+        if(clipLine(&bottomPoint4, &topPoint4))
+        {
+            continue;
+        }
+
+        topXYZ3 = polarToXYZ2(topPoint3);
+        topXYZ4 = polarToXYZ2(topPoint4);
+        bottomXYZ3 = polarToXYZ2(bottomPoint3);
+        bottomXYZ4 = polarToXYZ2(bottomPoint4);
+
+        // skirt objects
+        // top skirt
+        loftQuads((vector[]){ 
+                addVectors(topXYZ4, skirtOffset), 
+                addVectors(topXYZ3, skirtOffset), 
+                addVectors(topXYZ2, skirtOffset), 
+                addVectors(topXYZ1, skirtOffset) 
+            },
+            (vector[]){ 
+                subVectors(topXYZ4, skirtOffset), 
+                subVectors(topXYZ3, skirtOffset), 
+                subVectors(topXYZ2, skirtOffset), 
+                subVectors(topXYZ1, skirtOffset) 
+            });
+
+        // bottom skirt
+        loftQuads((vector[]){ 
+                subVectors(bottomXYZ1, skirtOffset), 
+                subVectors(bottomXYZ2, skirtOffset), 
+                subVectors(bottomXYZ3, skirtOffset), 
+                subVectors(bottomXYZ4, skirtOffset) 
+            }, 
+            (vector[]){ 
+                addVectors(bottomXYZ1, skirtOffset), 
+                addVectors(bottomXYZ2, skirtOffset), 
+                addVectors(bottomXYZ3, skirtOffset), 
+                addVectors(bottomXYZ4, skirtOffset) 
+            });
+
+    }
+}
+
+
+void main()
+{
+    if(!(out = fopen(FILENAME, "w")))
+    {
+        printf("Couldn't open %s\n", FILENAME);
+        exit(1);
+    }
+    
+    fprintf(out, "MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH-MESH\n");
+    countOffset = ftell(out);
+    writeInt32(0);
+    
+    // slope of the clipping plane Z/X
+    planeSlope = tan(toRad(PLANE_ANGLE));
+    // where clipping plane intersects Z axis
+    planeIntercept = LENGTH + planeSlope * (RADIUS + RIB_DEPTH);
+
+    planeNormal = (vector){ 
+        -sin(toRad(PLANE_ANGLE)), 
+        0, 
+        cos(toRad(PLANE_ANGLE)) 
+    };
+    planePoint = (vector){ 0.0, 0.0, planeIntercept };
+
+    double x2 = cos(toRad(PLANE_ANGLE)) * RADIUS;
+    double z2 = planeIntercept + sin(toRad(PLANE_ANGLE)) * RADIUS;
+    double z3 = planeIntercept - sin(toRad(PLANE_ANGLE)) * RADIUS;
+    double slope3 = (x2 - RADIUS) / z2;
+    double slope4 = (x2 - RADIUS) / z3;
+    double x3 = RADIUS + slope3 * LENGTH;
+    double x4 = RADIUS + slope4 * LENGTH;
+
+
+    // amount to compress X at top of cylinder to get a round hole
+    topAspect = (x3 + x4) / (RADIUS * 2);
+    printf("main %d: topAspect=%f planeNormal=%f, %f, %f\n", 
+        __LINE__, 
+        topAspect,
+        planeNormal.x,
+        planeNormal.y,
+        planeNormal.z);
+
+
+    makeIsogrid();
+    makeTube();
+
+    
+    fseek(out, countOffset, SEEK_SET);
+printf("main %d: triangleCount=%d\n", __LINE__, triangleCount);
+//triangleCount = 72;
+    writeInt32(triangleCount);
+    fclose(out);
+}
+
+
+
+
+
+
+
+
+

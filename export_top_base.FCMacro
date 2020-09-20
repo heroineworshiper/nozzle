@@ -1,0 +1,15 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: /amazon2/root/nozzle/export_top_base.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+import Mesh
+
+__objs__=[]
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Box018"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Part__Mirroring005"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Cut014"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Cut018"))
+Mesh.export(__objs__,u"/amazon2/root/nozzle/top_base.stl")
+
+del __objs__
+# Macro End: /amazon2/root/nozzle/export_top_base.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++

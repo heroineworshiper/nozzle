@@ -1,0 +1,163 @@
+# Synthesize lattice tubes
+
+# Must load the Draft workbench in the GUI
+
+
+import FreeCAD
+import math
+import Draft, Part
+import collections
+
+# mm
+RADIUS = 50.0
+THICKNESS = 2
+LENGTH = 100
+SLICES = 10
+# multiple of 2 per slice
+SEGMENTS = 20
+RIB_WIDTH = 1.0
+RIB_DEPTH = 1.0
+RIB_DIVISIONS = 2
+
+# arrays of points of all tube segments
+# points are in polar coordinates
+slices = []
+doc = App.activeDocument()
+
+
+def toRad(angle):
+    return angle * math.pi * 2.0 / 360.0
+
+def polarToXYZ(angle, radius, z):
+    x = radius * math.cos(angle)
+    y = -radius * math.sin(angle)
+    return Draft.Vector(x, y, z)
+
+def XYZToPolar(xyz):
+    angle = math.atan2(-xyz.y, xyz.x)
+    radius = math.hypot(xyz.x, xyz.y)
+    return Draft.Vector(angle, radius, xyz.z)
+
+# join 2 points on a cylinder with a solid tube
+# points are polar coords
+def makeCylinderLine(start, end, divisions, ribWidth, ribDepth):
+    points0 = []
+    points1 = []
+    points2 = []
+    points3 = []
+    depthVector = Draft.Vector(0, ribDepth / 2)
+    for i in range(0, divisions):
+        center1 = start + (end - start) * i / divisions
+        center2 = start + (end - start) * (i + 1) / divisions
+        # get perpendicular vector on the surface of the cylinder
+        diff = center2 - center1
+        # get perpendicular vector in mm
+        perpX = diff.z
+        perpZ = math.sin(diff.x) * RADIUS
+        perpMag = math.hypot(perpX, perpZ)
+        perpX = perpX / perpMag * ribWidth / 2
+        perpZ = perpZ / perpMag * ribWidth / 2
+        # get perpendicular vector in polar coords
+        perpVector = Draft.Vector(-math.asin(perpX / RADIUS), 0, perpZ)
+        
+        
+        if i == 0:
+            point0 = center1 - perpVector - depthVector
+            point1 = center1 - perpVector + depthVector
+            point2 = center1 + perpVector + depthVector
+            point3 = center1 + perpVector - depthVector
+            points0.append(polarToXYZ(point0.x, point0.y, point0.z))
+            points1.append(polarToXYZ(point1.x, point1.y, point1.z))
+            points2.append(polarToXYZ(point2.x, point2.y, point2.z))
+            points3.append(polarToXYZ(point3.x, point3.y, point3.z))
+
+        point0 = center2 - perpVector - depthVector
+        point1 = center2 - perpVector + depthVector
+        point2 = center2 + perpVector + depthVector
+        point3 = center2 + perpVector - depthVector
+        points0.append(polarToXYZ(point0.x, point0.y, point0.z))
+        points1.append(polarToXYZ(point1.x, point1.y, point1.z))
+        points2.append(polarToXYZ(point2.x, point2.y, point2.z))
+        points3.append(polarToXYZ(point3.x, point3.y, point3.z))
+
+    line0 = Draft.makeWire(points0, False, False, False)
+    line1 = Draft.makeWire(points1, False, False, False)
+    line2 = Draft.makeWire(points2, False, False, False)
+    line3 = Draft.makeWire(points3, False, False, False)
+    loft1 = doc.addObject('Part::Loft','Loft')
+    loft1.Sections = [line0, line1]
+    loft1.Solid = True
+    loft1.Ruled = True
+    loft1.Closed = True
+    
+    loft2 = doc.addObject('Part::Loft','Loft')
+    loft2.Sections = [line2, line3]
+    loft2.Solid = True
+    loft2.Ruled = True
+    loft2.Closed = True
+    
+    loft = doc.addObject('Part::Loft','Loft')
+    loft.Sections = [loft1, loft2]
+    loft.Solid = True
+    loft.Ruled = True
+    loft.Closed = True
+
+
+#    obj=Draft.clone(loft)
+#    FreeCAD.ActiveDocument.removeObject(loft.Name)
+#    FreeCAD.ActiveDocument.removeObject(line0.Name)
+#    FreeCAD.ActiveDocument.removeObject(line1.Name)
+#    FreeCAD.ActiveDocument.removeObject(line2.Name)
+#    FreeCAD.ActiveDocument.removeObject(line3.Name)
+
+
+def makeTube():
+    # create points defining the tube
+    # divide tube into slices
+    for slice in range(0, SLICES):
+        z = slice * LENGTH / SLICES
+        segments = []
+        # for each slice, we have a number of segments + 1 overlapping point
+        for segment in range(0, SEGMENTS + 1):
+            angle = toRad(segment * 360 / SEGMENTS)
+            point = Draft.Vector(angle, RADIUS, z)
+            segments.append(point)
+        slices.append(segments)
+
+    # create longerons
+    if True:
+#        for slice in range(0, SLICES - 1):
+        for slice in range(0, 1):
+            for segment in range(0, SEGMENTS):
+                 point0 = slices[slice][segment]
+                 point1 = slices[slice + 1][segment]
+                 makeCylinderLine(point0, point1, 2, RIB_WIDTH, RIB_DEPTH)
+
+    # create diagonals
+    if False:
+        for slice in range(0, SLICES - 1):
+    #    for slice in range(0, 1):
+            slice1 = slice
+            slice2 = slice + 1
+            segment = 0
+            while segment < SEGMENTS:
+                segment1 = segment
+                segment2 = segment + 1
+                segment3 = segment + 2
+                segment += 2
+
+                if (slice % 2) == 0:
+                    point0 = slices[slice1][segment1]
+                    point1 = slices[slice2][segment2]
+                    point2 = slices[slice1][segment3]
+                    makeCylinderLine(point0, point1, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                    makeCylinderLine(point1, point2, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                else:
+                    point0 = slices[slice2][segment1]
+                    point1 = slices[slice1][segment2]
+                    point2 = slices[slice2][segment3]
+                    makeCylinderLine(point0, point1, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+                    makeCylinderLine(point1, point2, RIB_DIVISIONS, RIB_WIDTH, RIB_DEPTH)
+
+
+makeTube()

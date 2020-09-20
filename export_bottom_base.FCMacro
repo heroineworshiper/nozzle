@@ -1,0 +1,15 @@
+# -*- coding: utf-8 -*-
+
+# Macro Begin: /amazon2/root/speedo/select_bottom_base.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
+import FreeCAD
+import Mesh
+
+__objs__=[]
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Part020"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Box007"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Part__Mirroring004"))
+__objs__.append(FreeCAD.getDocument("Unnamed").getObject("Cut013"))
+Mesh.export(__objs__,u"/amazon2/root/nozzle/bottom_base.stl")
+
+del __objs__
+# Macro End: /amazon2/root/speedo/select_bottom_base.FCMacro +++++++++++++++++++++++++++++++++++++++++++++++++
