@@ -1,6 +1,6 @@
 /*
  * F-35 NOZZLE CONTROLLER
- * Copyright (C) 2020 Adam Williams <broadcast at earthling dot net>
+ * Copyright (C) 2020-2021 Adam Williams <broadcast at earthling dot net>
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -24,7 +24,7 @@
 // D7 - LED
 // D0-D5 - H bridges
 
-// PORTC is dead on this particular chip
+// PORTC is dead on the recycled chip
 
 
 // CONFIG
@@ -41,15 +41,20 @@
 #include <pic16f877a.h>
 #include <stdint.h>
 #include <string.h>
+#include "nozzle.h"
 
 // control motors using console input.  Disable if the serial port is floating.
 //#define TEST_MODE
 // less accurate motor positioning but more debugging output
 //#define VERBOSE
 
+// use XY control instead of polar
+//#define XY_CONTROL
+
 #define ABS(x) ((x) < 0 ? (-(x)) : (x))
 
-#define CLOCKSPEED 13300000
+//#define CLOCKSPEED 13300000
+#define CLOCKSPEED 22579000
 #define LED_TRIS TRISDbits.TRISD7
 #define LED_PORT PORTDbits.RD7
 
@@ -87,6 +92,7 @@ uint8_t led_counter = 0;
 #define HZ 100
 #define TIMER1_VALUE (-CLOCKSPEED / 4 / 8 / HZ)
 #define LED_DELAY (HZ / 2)
+#define LED_DELAY2 (HZ / 4)
 
 uint8_t got_tick = 0;
 uint8_t tick = 0;
@@ -114,11 +120,6 @@ uint8_t current_adc = 0;
 #define ENCODER2 4 // farthest motor
 // amount above or below 0x80
 #define SENSOR_THRESHOLD 0x20
-
-// home positions.  Not the same as the min & max
-#define HOME0 22
-#define HOME1 17
-#define HOME2 8
 
 typedef struct 
 {
@@ -157,16 +158,45 @@ typedef struct
 } tracking_state_t;
 tracking_state_t tracking_state[TOTAL_MOTORS];
 
-// total bend of the nozzle
-uint8_t nozzle_step = 0;
-// user position of motor 0 to which the nozzle_step adds an offset to compensate
-// for the nozzle bending sideways
-int8_t radial_position = 0;
-// nozzle steps based on the motor with the most steps
-#define MAX_STEPS 24
-// encoder positions of the 3 motors based on nozzle step
-int8_t step_to_encoders[MAX_STEPS * TOTAL_MOTORS + TOTAL_MOTORS];
 
+// pitch of the nozzle in polar coordinates
+int8_t nozzle_pitch = 0;
+// user position of motor 0 to which the nozzle_pitch adds an offset to compensate
+// for the nozzle bending sideways
+int8_t nozzle_angle = 0;
+
+#ifdef XY_CONTROL
+// nozzle direction in XY coordinates
+int16_t nozzle_x = 0;
+int16_t nozzle_y = 0;
+
+// neighboring nozzle positions in XY
+#define NEIGHBORS 4
+int16_t neighbor_x[NEIGHBORS];
+int16_t neighbor_y[NEIGHBORS];
+uint8_t good_neighbors[NEIGHBORS];
+// relative angle/pitch of neighboring nozzle positions
+const int8_t neighbor_pitch[] = {  0, 0, -1, 1 };
+const int8_t neighbor_angle[] = { -1, 1,  0, 0 };
+#endif // XY_CONTROL
+
+
+typedef struct
+{
+    int8_t pitch;
+    int8_t angle;
+} preset_t;
+
+// location in EEPROM of presets
+#define DATA_EE_ADDR 0x00
+#define PRESETS 4
+#define PRESET_DELAY (HZ / 2)
+uint8_t setting_preset = 0;
+uint8_t current_preset = 0;
+preset_t presets[PRESETS];
+void (*preset_state)() = 0;
+int8_t orig_nozzle_angle = 0;
+uint8_t preset_delay = 0;
 
 
 
@@ -174,93 +204,67 @@ int8_t step_to_encoders[MAX_STEPS * TOTAL_MOTORS + TOTAL_MOTORS];
 // IR code follows.  Improved version of heroineclock 2
 typedef struct
 {
-    const int16_t *data;
+    const uint8_t *data;
 	const uint8_t size;
     const uint8_t value;
 } ir_code_t;
 
 // remote control codes
-const int16_t up_data[] = 
-{ 
-    0x0730, 0x03cc, 0x0074, 0x006f, 0x0078, 0x015b, 0x0079, 0x0073,
-    0x0074, 0x015b, 0x0079, 0x0157, 0x007d, 0x015b, 0x0078, 0x015b,
-    0x0078, 0x006f, 0x0077, 0x015b, 0x0079, 0x0073, 0x0074, 0x015f,
-    0x0074, 0x006f, 0x0078, 0x0073, 0x0074, 0x0073, 0x0074, 0x0073,
-    0x0075, 0x015e, 0x0074, 0x0073, 0x0074, 0x006f, 0x0078, 0x0074,
-    0x0075, 0x015d, 0x0075, 0x015b, 0x0077, 0x0073, 0x0074, 0x015c,
-    0x0077, 0x0073, 0x0074, 0x015d, 0x0076, 0x015c, 0x0077, 0x015f,
-    0x0074, 0x0070, 0x0077, 0x0074, 0x0074, 0x015e, 0x0075, 0x006e,
-    0x0078, 0x0156, 0x007e, 0x2063, 0x0734, 0x01c6, 0x007a
-};
-
-const int16_t down_data[] = 
-{ 
-    0x0737, 0x03c3, 0x0079, 0x006e, 0x0079, 0x0155, 0x007e, 0x0071,
-    0x0077, 0x015b, 0x0077, 0x015a, 0x0079, 0x015c, 0x0078, 0x0155,
-    0x007e, 0x006a, 0x007d, 0x015f, 0x0075, 0x006a, 0x007d, 0x015a,
-    0x0079, 0x0073, 0x0074, 0x0073, 0x0075, 0x006d, 0x007a, 0x0072,
-    0x0075, 0x015b, 0x0077, 0x0156, 0x007d, 0x006a, 0x007d, 0x006c,
-    0x007b, 0x0155, 0x007e, 0x0159, 0x007b, 0x0068, 0x007e, 0x015b,
-    0x0078, 0x0070, 0x0077, 0x006e, 0x0079, 0x0157, 0x007c, 0x015c,
-    0x0078, 0x0073, 0x0074, 0x006b, 0x007e, 0x015a, 0x0078, 0x006f,
-    0x0077, 0x015c, 0x0078, 0x2068, 0x0730, 0x01c1, 0x007a
-};
-
-const int16_t left_data[] =  
-{  
-    0x0730, 0x03c7, 0x0078, 0x0073, 0x0075, 0x015a, 0x0079, 0x006e, 0x007a,
-    0x015b, 0x0077, 0x015b, 0x0078, 0x015a, 0x0079, 0x015e, 0x0075, 0x0073,
-    0x0075, 0x015a, 0x0078, 0x006b, 0x007c, 0x015a, 0x0079, 0x006e, 0x0079,
-    0x006e, 0x0079, 0x006e, 0x007a, 0x006a, 0x007d, 0x015a, 0x0078, 0x015f,
-    0x0074, 0x0158, 0x007b, 0x006f, 0x0078, 0x006f, 0x0078, 0x015b, 0x0078,
-    0x006f, 0x0078, 0x015a, 0x0079, 0x0073, 0x0074, 0x006f, 0x0079, 0x0068,
-    0x007e, 0x015d, 0x0076, 0x015b, 0x0078, 0x006f, 0x0078, 0x015b, 0x0079,
-    0x006f, 0x0078, 0x0157, 0x007c, 0x2063, 0x0736, 0x01bf, 0x007a  
-};
-
-const int16_t right_data[] = 
-{ 
-    0x072f, 0x03c6, 0x0078, 0x0063, 0x0084,
-    0x0155, 0x007e, 0x0073, 0x0075, 0x015e, 0x0075, 0x0156, 0x007d, 
-    0x0154, 0x007e, 0x0157, 0x007d, 0x006f, 0x0078, 0x0156, 0x007c, 
-    0x006f, 0x0079, 0x015f, 0x0074, 0x0072, 0x0075, 0x0070, 0x0077, 
-    0x0073, 0x0074, 0x0070, 0x0077, 0x015b, 0x0078, 0x006b, 0x007e, 
-    0x0159, 0x0079, 0x0073, 0x0074, 0x006b, 0x007d, 0x015a, 0x0079, 
-    0x006e, 0x0079, 0x015a, 0x0078, 0x006b, 0x007c, 0x015b, 0x0078, 
-    0x0072, 0x0076, 0x015b, 0x0077, 0x0157, 0x007c, 0x006e, 0x0079, 
-    0x015e, 0x0074, 0x0072, 0x0075, 0x015b, 0x0078, 0x205d, 0x073a, 
-    0x01c7, 0x007a 
-};
-
-const int16_t fastfwd_data[] = 
+const uint8_t up_data[] = 
 {
-// fast fwd button
-    0x072e, 0x03c3, 0x007d, 0x006f, 0x0078, 0x0157, 0x007e, 0x0069,
-    0x007c, 0x015f, 0x0074, 0x015c, 0x0078, 0x015f, 0x0074, 0x015f,
-    0x0076, 0x0071, 0x0074, 0x015b, 0x0078, 0x0073, 0x0074, 0x015b,
-    0x0078, 0x0070, 0x0077, 0x0073, 0x0074, 0x0070, 0x0079, 0x0071,
-    0x0074, 0x0156, 0x007d, 0x006f, 0x0078, 0x0073, 0x0074, 0x015a,
-    0x0079, 0x015b, 0x0079, 0x015b, 0x0078, 0x0073, 0x0074, 0x006f,
-    0x0079, 0x0159, 0x0079, 0x0156, 0x007d, 0x015f, 0x0074, 0x0073,
-    0x0074, 0x006e, 0x0079, 0x0073, 0x0075, 0x015a, 0x0079, 0x015b,
-    0x0079, 0x006f, 0x007a, 0x2066, 0x0730, 0x01c6, 0x0079
+    0x30, 0x19, 0x03, 0x02, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0xdb, 0x30, 0x0b, 0x03 
 };
+
+const uint8_t down_data[] = 
+{ 
+    0x30, 0x19, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x02, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
+const uint8_t left_data[] =  
+{
+    0x30, 0x19, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0xdb, 0x30, 0x0b, 0x03
+};
+
+const uint8_t right_data[] = 
+{
+    0x30, 0x19, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
 
 
 // fast rewind button
-const int16_t fastrev_data[] =
+const uint8_t fastrev_data[] =
 {
-
-    0x0730, 0x03c4, 0x0079, 0x0072, 0x0075, 0x0159, 0x007b, 0x006e, 0x0079,
-    0x015a, 0x0079, 0x015a, 0x0078, 0x015b, 0x0079, 0x0156, 0x007e, 0x0069,
-    0x007e, 0x015a, 0x0078, 0x006a, 0x007d, 0x015a, 0x0079, 0x006f, 0x0078,
-    0x006a, 0x007d, 0x006d, 0x007b, 0x006d, 0x0079, 0x0155, 0x007d, 0x006d,
-    0x007a, 0x015a, 0x007a, 0x0158, 0x007b, 0x006e, 0x007a, 0x006d, 0x0079,
-    0x0069, 0x007f, 0x006d, 0x007a, 0x0155, 0x007d, 0x015a, 0x007a, 0x0072,
-    0x0075, 0x006e, 0x007a, 0x0155, 0x007d, 0x015f, 0x0074, 0x015f, 0x0075,
-    0x015a, 0x007a, 0x006d, 0x007a, 0x206c, 0x072c, 0x01c6, 0x0078 
-
+    0x30, 0x19, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0xdb, 0x30, 0x0c, 0x03
 };
+
+
+const uint8_t fastfwd_data[] = 
+{
+    0x30, 0x19, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x02, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
+
+const uint8_t button7_data[] = 
+{
+    0x30, 0x19, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x08, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
+const uint8_t button8_data[] = 
+{
+    0x30, 0x19, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
+const uint8_t button9_data[] = 
+{
+    0x30, 0x19, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0x03, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x02, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
+const uint8_t button0_data[] = 
+{
+    0x30, 0x19, 0x03, 0x03, 0x03, 0x09, 0x03, 0x02, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x02, 0x03, 0x02, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x03, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x09, 0x03, 0x03, 0x03, 0xdb, 0x30, 0x0c, 0x03
+};
+
 
 // remote control buttons to enums
 #define UP 0
@@ -268,21 +272,29 @@ const int16_t fastrev_data[] =
 #define LEFT 2
 #define RIGHT 3
 #define POWER 4
-#define BOGUS 5
+#define SET_PRESET 5
+#define PRESET1 6
+#define PRESET2 7
+#define PRESET3 8
+#define PRESET4 9
+#define BOGUS 10
 
 const ir_code_t ir_codes[] = { 
-    { up_data,      sizeof(up_data) / 2,      UP },
-	{ down_data,  sizeof(down_data) / 2,  DOWN },
-	{ left_data,  sizeof(left_data) / 2,  LEFT },
-	{ right_data, sizeof(right_data) / 2, RIGHT },
-// whatever is in index 4 tends to get falsely hit
-    { fastfwd_data, sizeof(fastfwd_data) / 2, BOGUS },
-    { fastrev_data, sizeof(fastrev_data) / 2, POWER },
+    { button7_data, sizeof(button7_data), PRESET1 },
+    { button8_data, sizeof(button8_data), PRESET2 },
+    { button9_data, sizeof(button9_data), PRESET3 },
+    { button0_data, sizeof(fastrev_data), PRESET4 },
+    { up_data,    sizeof(up_data),      UP },
+	{ down_data,  sizeof(down_data),  DOWN },
+	{ left_data,  sizeof(left_data),  LEFT },
+	{ right_data, sizeof(right_data), RIGHT },
+    { fastfwd_data, sizeof(fastfwd_data), SET_PRESET },
+    { fastrev_data, sizeof(fastrev_data), POWER },
 };
 
-#define IR_MARGIN 16
+#define IR_MARGIN 2
 // At least 120ms as measured on the scope
-#define IR_TIMEOUT 30000
+#define IR_TIMEOUT 725
 #define TOTAL_CODES (sizeof(ir_codes) / sizeof(ir_code_t))
 
 // which codes have matched all bytes received so far
@@ -300,12 +312,12 @@ uint8_t repeat_delay = 0;
 
 // IR interrupt fired
 volatile uint8_t got_ir_int = 0;
-// time of IR interrupt in us / 4
-int16_t ir_time = 0;
-// software defined high byte of IR timer
-uint8_t tmr2_high = 0;
-// time in interrupt handler
-volatile uint16_t ir_time2 = 0;
+// time of last IR interrupt
+volatile int16_t ir_time = 0;
+// incremented for every TMR2 interrupt
+uint16_t tmr2_high = 0;
+// set in the interrupt handler when IR has timed out
+uint8_t ir_timeout = 0;
 uint8_t first_edge = 1;
 
 
@@ -415,6 +427,22 @@ void flush_uart()
         handle_uart();
     }
 }
+
+
+
+#ifdef XY_CONTROL
+
+// convert encoder positions to XY coordinates
+void polar_to_xy(int16_t *x_out, int16_t *y_out, uint8_t pitch, uint8_t angle)
+{
+    int sin_value = sin_table[angle - ENCODER0_MIN];
+    int cos_value = cos_table[angle - ENCODER0_MIN];
+    *x_out = cos_value * pitch;
+    *y_out = sin_value * pitch;
+}
+
+#endif // XY_CONTROL
+
 
 // motor state machine
 
@@ -641,8 +669,8 @@ void arm_motors()
     tracking_state[0].target_position = HOME0 + step_to_encoders[0 * TOTAL_MOTORS + 0];
     tracking_state[0].changed = 0;
 
-    nozzle_step = 0;
-    radial_position = HOME0;
+    nozzle_pitch = 0;
+    nozzle_angle = HOME0;
     motor_state = motor_home1;
 }
 
@@ -653,38 +681,57 @@ void disarm_motors()
     motor_state = motor_idle;
 }
 
-// compute the encoder positions based on nozzle step
-void handle_nozzle_step()
+// update the encoder positions based on polar positions
+void update_motors()
 {
 #ifdef VERBOSE
-    print_text("nozzle_step=");
-    print_number(nozzle_step);
-    print_text("radial_position=");
-    print_number(radial_position);
+    print_text("nozzle_pitch=");
+    print_number(nozzle_pitch);
+    print_text("nozzle_angle=");
+    print_number(nozzle_angle);
     print_text("\n");
     flush_uart();
 #endif
 
-    tracking_state[0].target_position = radial_position +
-        step_to_encoders[nozzle_step * TOTAL_MOTORS + 0];
+    if(nozzle_pitch > PITCH_STEPS)
+    {
+        nozzle_pitch = PITCH_STEPS;
+    }
+    if(nozzle_pitch < 0)
+    {
+        nozzle_pitch = 0;
+    }
+
+    if(nozzle_angle > ANGLE_STEPS)
+    {
+        nozzle_angle = ANGLE_STEPS;
+    }
+    if(nozzle_angle < 0)
+    {
+        nozzle_angle = 0;
+    }
+
+
+    tracking_state[0].target_position = nozzle_angle +
+        step_to_encoders[nozzle_pitch * TOTAL_MOTORS + 0];
     tracking_state[1].target_position = 
-        step_to_encoders[nozzle_step * TOTAL_MOTORS + 1];
+        step_to_encoders[nozzle_pitch * TOTAL_MOTORS + 1];
     tracking_state[2].target_position = 
-        step_to_encoders[nozzle_step * TOTAL_MOTORS + 2];
+        step_to_encoders[nozzle_pitch * TOTAL_MOTORS + 2];
 
     if(tracking_state[0].target_position < tracking_state[0].min)
     {
         int8_t diff = tracking_state[0].min - tracking_state[0].target_position;
         tracking_state[0].target_position += diff;
 // clamp radial position based on the nozzle step
-        radial_position += diff;
+        nozzle_angle += diff;
     }
     if(tracking_state[0].target_position > tracking_state[0].max)
     {
         int8_t diff = tracking_state[0].target_position - tracking_state[0].max;
         tracking_state[0].target_position -= diff;
 // clamp radial position based on the nozzle step
-        radial_position -= diff;
+        nozzle_angle -= diff;
     }
 
 
@@ -702,7 +749,7 @@ void handle_nozzle_step()
     }
 
 #ifdef VERBOSE
-    print_number(nozzle_step);
+    print_number(nozzle_pitch);
     print_number(tracking_state[0].target_position);
     print_number(tracking_state[1].target_position);
     print_number(tracking_state[2].target_position);
@@ -712,48 +759,379 @@ void handle_nozzle_step()
 
 }
 
+// return 1 if the motors are tracking
+uint8_t motors_tracking()
+{
+    if(tracking_state[0].changed > 0 ||
+        tracking_state[1].changed > 0 ||
+        tracking_state[2].changed > 0)
+    {
+        return 1;
+    }
+    return 0;
+}
+
+void do_preset_pitch()
+{
+    if(!motors_tracking())
+    {
+// advance to pitch
+        int8_t want_pitch = presets[current_preset].pitch;
+        if(want_pitch > nozzle_pitch)
+        {
+            nozzle_pitch++;
+            update_motors();
+        }
+        else
+        if(want_pitch < nozzle_pitch)
+        {
+            nozzle_pitch--;
+            update_motors();
+        }
+        else
+        {
+// done
+            preset_state = 0;
+        }
+    }
+}
+
+void do_preset_delay2()
+{
+    if(preset_delay == 0)
+    {
+        preset_state = do_preset_pitch;
+    }
+}
+
+void do_preset_angle()
+{
+    if(!motors_tracking())
+    {
+// advance to angle
+        int8_t want_angle = presets[current_preset].angle;
+        if(want_angle > nozzle_angle)
+        {
+            nozzle_angle++;
+            update_motors();
+        }
+        else
+        if(want_angle < nozzle_angle)
+        {
+            nozzle_angle--;
+            update_motors();
+        }
+        else
+        {
+// go to the pitch
+            preset_delay = PRESET_DELAY;
+            preset_state = do_preset_delay2;
+        }
+    }
+}
+
+void do_preset_delay1()
+{
+    if(preset_delay == 0)
+    {
+        preset_state = do_preset_angle;
+    }
+}
+
+void do_preset_center()
+{
+    if(!motors_tracking())
+    {
+// center it
+        if(nozzle_pitch > 0)
+        {
+            nozzle_pitch--;
+            update_motors();
+        }
+        else
+        {
+            preset_delay = PRESET_DELAY;
+            preset_state = do_preset_delay1;
+        }
+    }
+}
+
+void do_preset_save2()
+{
+    if(preset_delay == 0)
+    {
+        nozzle_angle = orig_nozzle_angle;
+        update_motors();
+        preset_state = 0;
+    }
+}
+
+void do_preset_save1()
+{
+    if(!motors_tracking())
+    {
+        preset_delay = PRESET_DELAY;
+        preset_state = do_preset_save2;
+    }
+}
+
+void read_presets()
+{
+    uint8_t i;
+    uint8_t *ptr = (uint8_t*)presets;
+    for(i = 0; i < sizeof(presets); i++)
+    {
+        EEADR = DATA_EE_ADDR + i;
+        EECON1bits.EEPGD = 0;
+        EECON1bits.RD = 1;
+        *ptr++ = EEDATA;
+    }
+}
+
+void write_presets()
+{
+    uint8_t i;
+    uint8_t *ptr = (uint8_t*)presets;
+// disable interrupts
+    INTCONbits.GIE = 0;
+    for(i = 0; i < sizeof(presets); i++)
+    {
+        PIR2bits.EEIF = 0;
+        EEADR = DATA_EE_ADDR + i; // address
+        EEDATA = *ptr; // value
+        EECON1bits.EEPGD = 0; // data memory
+        EECON1bits.WREN = 1; // enable writes
+        EECON2 = 0x55;
+        EECON2 = 0xaa;
+        EECON1bits.WR = 1; // write the byte
+        ptr++;
+        
+        while(!PIR2bits.EEIF)
+        {
+        }
+    }
+
+// disable writes
+    EECON1bits.WREN = 0;
+// enable interrupts
+    INTCONbits.GIE = 1;
+}
+
+void handle_preset_button(int preset)
+{
+    if(setting_preset)
+    {
+        presets[preset].pitch = nozzle_pitch;
+        presets[preset].angle = nozzle_angle;
+        write_presets();
+    
+        setting_preset = 0;
+// LED on
+        LED_PORT = 1;
+
+// wiggle the nozzle
+        orig_nozzle_angle = nozzle_angle;
+        if(nozzle_angle < ANGLE_STEPS)
+        {
+            nozzle_angle++;
+        }
+        else
+        {
+            nozzle_angle--;
+        }
+        update_motors();
+        preset_state = do_preset_save1;
+    }
+    else
+    {
+        current_preset = preset;
+// center it
+        preset_state = do_preset_center;
+    }
+}
+
+#ifdef XY_CONTROL
+
+void calculate_neighbors()
+{
+    uint8_t i;
+    for(i = 0; i < NEIGHBORS; i++)
+    {
+        uint8_t pitch = nozzle_pitch + neighbor_pitch[i];
+        uint8_t angle = nozzle_angle + neighbor_angle[i];
+        if(pitch >= 0 &&
+            pitch <= PITCH_STEPS &&
+            angle >= ENCODER0_MIN &&
+            angle <= ENCODER0_MAX)
+        {
+            polar_to_xy(&neighbor_x[i], 
+                &neighbor_x[i], 
+                nozzle_pitch + neighbor_pitch[i], 
+                nozzle_angle + neighbor_angle[i]);
+            good_neighbors[i] = 1;
+        }
+        else
+        {
+            good_neighbors[i] = 0;
+        }
+    }
+}
+
+#endif // XY_CONTROL
+
+
+#define DO_XY_CONTROL(want_direction, reject_direction, store_direction) \
+    calculate_neighbors(); \
+ \
+/* get neighbors in desired direction */ \
+    int16_t distance; \
+    uint8_t best_neighbor = 0xff; \
+    for(i = 0; i < NEIGHBORS; i++) \
+    { \
+        if(good_neighbors[i]) \
+        { \
+            good_neighbors[i] = want_direction; \
+        } \
+    } \
+ \
+/* get closest neighbor in undesired direction */ \
+    for(i = 0; i < NEIGHBORS; i++) \
+    { \
+        if(good_neighbors[i]) \
+        { \
+            int16_t new_distance = ABS(reject_direction); \
+            if(best_neighbor == 0xff || \
+                new_distance < distance) \
+            { \
+                distance = new_distance; \
+                best_neighbor = i; \
+            } \
+        } \
+    } \
+ \
+/* got one */ \
+    if(best_neighbor != 0xff) \
+    { \
+        store_direction; \
+        nozzle_pitch = nozzle_pitch + neighbor_pitch[best_neighbor]; \
+        nozzle_angle = nozzle_angle + neighbor_angle[best_neighbor]; \
+        update_motors(); \
+    }
+
 
 void handle_ir_code()
 {
+    uint8_t i;
 	switch(ir_code)
 	{
         case UP:
+            setting_preset = 0;
+            preset_state = 0;
             LED_PORT = !LED_PORT;
-            if(nozzle_step > 0)
+
+
+
+#ifdef XY_CONTROL
+            DO_XY_CONTROL((neighbor_y[i] > nozzle_y),
+                neighbor_x[i] - nozzle_x,
+                nozzle_y = neighbor_y[best_neighbor])
+            
+#else // XY_CONTROL
+            if(nozzle_pitch > 0)
             {
-                nozzle_step--;
-                handle_nozzle_step();
+                nozzle_pitch--;
+                update_motors();
             }
+#endif // !XY_CONTROL
             break;
 
         case DOWN:
+            setting_preset = 0;
+            preset_state = 0;
             LED_PORT = !LED_PORT;
-            if(nozzle_step < MAX_STEPS)
+
+#ifdef XY_CONTROL
+            DO_XY_CONTROL((neighbor_y[i] < nozzle_y),
+                neighbor_x[i] - nozzle_x,
+                nozzle_y = neighbor_y[best_neighbor])
+            
+#else // XY_CONTROL
+            if(nozzle_pitch < PITCH_STEPS)
             {
-                nozzle_step++;
-                handle_nozzle_step();
+                nozzle_pitch++;
+                update_motors();
             }
+#endif // !XY_CONTROL
             break;
 
         case LEFT:
+            setting_preset = 0;
+            preset_state = 0;
             LED_PORT = !LED_PORT;
-            if(radial_position < tracking_state[0].max)
+#ifdef XY_CONTROL
+            DO_XY_CONTROL((neighbor_x[i] < nozzle_x),
+                neighbor_y[i] - nozzle_y,
+                nozzle_x = neighbor_y[best_neighbor])
+            
+#else // XY_CONTROL
+            if(nozzle_angle < tracking_state[0].max)
             {
-                radial_position++;
-                handle_nozzle_step();
+                nozzle_angle++;
+                update_motors();
             }
+#endif // !XY_CONTROL
             break;
 
         case RIGHT:
+            setting_preset = 0;
+            preset_state = 0;
             LED_PORT = !LED_PORT;
-            if(radial_position > tracking_state[0].min)
+
+#ifdef XY_CONTROL
+            DO_XY_CONTROL((neighbor_x[i] > nozzle_x),
+                neighbor_y[i] - nozzle_y,
+                nozzle_x = neighbor_y[best_neighbor])
+            
+#else // XY_CONTROL
+            if(nozzle_angle > tracking_state[0].min)
             {
-                radial_position--;
-                handle_nozzle_step();
+                nozzle_angle--;
+                update_motors();
+            }
+#endif // !XY_CONTROL
+            break;
+        
+        case SET_PRESET:
+            if(setting_preset)
+            {
+                setting_preset = 0;
+            }
+            else
+            if(armed)
+            {
+                setting_preset = 1;
             }
             break;
 
+        case PRESET1:
+            handle_preset_button(0);
+            break;
+
+        case PRESET2:
+            handle_preset_button(1);
+            break;
+
+        case PRESET3:
+            handle_preset_button(2);
+            break;
+
+        case PRESET4:
+            handle_preset_button(3);
+            break;
+
         case POWER:
+            setting_preset = 0;
+            preset_state = 0;
             LED_PORT = !LED_PORT;
             if(!armed)
             {
@@ -772,9 +1150,8 @@ void handle_ir2()
 // uncomment this to capture the IR codes
 // send binary to save serial port space & see if the length is consistent
 // DEBUG
-// print_byte((ir_time >> 8) & 0xff);
-// print_byte(ir_time & 0xff);
-// return;
+//print_byte(ir_time);
+//return;
 
 
 
@@ -791,7 +1168,7 @@ void handle_ir2()
 		if(!ir_code_failed[i])
 		{
 			const ir_code_t *code = &ir_codes[i];
-			const int16_t *data = code->data;
+			const uint8_t *data = code->data;
 
             if(ir_offset < code->size)
             {
@@ -830,9 +1207,12 @@ void handle_ir2()
 #ifdef VERBOSE
 		print_text("IR code: ");
 		print_number(ir_code);
+        print_text("total codes=");
+        print_number(TOTAL_CODES);
 		print_byte('\n');
         flush_uart();
 #endif
+
 // handle the code
         handle_ir_code();
     }
@@ -857,9 +1237,7 @@ void handle_ir()
 {
     uint8_t i;
 // IR timed out
-    uint16_t test_time = ((uint16_t)tmr2_high) << 8;
-    if(test_time > IR_TIMEOUT &&
-        !first_edge)
+    if(ir_timeout && !first_edge)
     {
 #ifdef VERBOSE
         print_text("IR released\n");
@@ -900,7 +1278,6 @@ void handle_ir()
         got_ir_int = 0;
 // reverse edge
 		OPTION_REGbits.INTEDG = !OPTION_REGbits.INTEDG;
-		ir_time = ir_time2;
     	if(first_edge)
     	{
         	first_edge = 0;
@@ -1229,6 +1606,10 @@ void interrupt isr()
         {
             PIR1bits.TMR2IF = 0;
             tmr2_high++;
+            if(tmr2_high > IR_TIMEOUT)
+            {
+                ir_timeout = 1;
+            }
             interrupt_done = 0;
         }
 
@@ -1236,20 +1617,20 @@ void interrupt isr()
 		if(INTCONbits.INTF)
 		{
 			INTCONbits.INTF = 0;
-// copy the hardware timer value
-			ir_time2 = TMR2;
 // reset the timer
 			TMR2 = 0;
             PIR1bits.TMR2IF = 0;
-
 // copy the software timer value
-			ir_time2 |= ((uint16_t)tmr2_high) << 8;
+			ir_time = tmr2_high;
             tmr2_high = 0;
+            ir_timeout = 0;
+
 			got_ir_int = 1;
 			interrupt_done = 0;
 		}
     }
 }
+
 
 void main()
 {
@@ -1277,8 +1658,8 @@ void main()
 	ir_offset = 0;
     first_edge = 1;
 
-// IR timer. 16x prescale. page 63
-    T2CON = 0b00000111;
+// IR timer. 4x prescale. page 63
+    T2CON = 0b00000101;
 // timer period
     PR2 = 0xff;
     PIR1bits.TMR2IF = 0;
@@ -1301,7 +1682,7 @@ void main()
     TMR0 = 0;
     INTCONbits.TMR0IF = 0;
 
-
+    read_presets();
 
 // enable all interrupts page 26
     INTCONbits.PEIE = 1;
@@ -1311,8 +1692,8 @@ void main()
 
 
 // initialize motor tables
-    tracking_state[2].min = 8;
-    tracking_state[2].max = 31;
+    tracking_state[2].min = ENCODER2_MIN;
+    tracking_state[2].max = ENCODER2_MAX;
     tracking_state[2].boundary = BOUNDARY2;
     tracking_state[2].encoder = ENCODER2;
     tracking_state[2].dec_mask = MOTOR2_RIGHT;
@@ -1321,8 +1702,8 @@ void main()
     tracking_state[2].total_mask = MOTOR2_LEFT | MOTOR2_RIGHT;
     tracking_state[2].brake = 1;
 
-    tracking_state[1].min = 17;
-    tracking_state[1].max = 41;
+    tracking_state[1].min = ENCODER1_MIN;
+    tracking_state[1].max = ENCODER1_MAX;
     tracking_state[1].boundary = BOUNDARY1;
     tracking_state[1].encoder = ENCODER1;
     tracking_state[1].dec_mask = MOTOR1_LEFT;
@@ -1330,8 +1711,8 @@ void main()
     tracking_state[1].total_unmask = ~(MOTOR1_LEFT | MOTOR1_RIGHT);
     tracking_state[1].total_mask = MOTOR1_LEFT | MOTOR1_RIGHT;
 
-    tracking_state[0].min = 6;
-    tracking_state[0].max = 45;
+    tracking_state[0].min = ENCODER0_MIN;
+    tracking_state[0].max = ENCODER0_MAX;
     tracking_state[0].boundary = BOUNDARY0;
     tracking_state[0].encoder = ENCODER0;
     tracking_state[0].dec_mask = MOTOR0_RIGHT;
@@ -1339,36 +1720,13 @@ void main()
     tracking_state[0].total_unmask = ~(MOTOR0_LEFT | MOTOR0_RIGHT);
     tracking_state[0].total_mask = MOTOR0_LEFT | MOTOR0_RIGHT;
 
-// hard coded offsets for encoder 0
-    const int8_t encoder0_values[] = {
-        -10, -10, -10, -10, -10, -10, -10, -9, 
-        -9, -8, -8, -7, -6, -6, -5, -5, 
-        -4, -4, -3, -3, -2, -2, -1, -1, 
-        0, 0
-    };
-    
+#ifdef XY_CONTROL
+// starting coordinate
+    polar_to_xy(&nozzle_x, &nozzle_y, nozzle_pitch, nozzle_angle);
+#endif // XY_CONTROL
 
-    for(i = 0; i < MAX_STEPS + 1; i++)
-    {
-        step_to_encoders[i * TOTAL_MOTORS + 0] = encoder0_values[i];
-// encoder 1 value
-        step_to_encoders[i * TOTAL_MOTORS + 1] = 
-            (uint32_t)tracking_state[1].min +
-            (uint32_t)(tracking_state[1].max - tracking_state[1].min) * i / MAX_STEPS;
-// encoder 2 value
-        step_to_encoders[i * TOTAL_MOTORS + 2] = 
-            (uint32_t)tracking_state[2].min +
-            (uint32_t)(tracking_state[2].max - tracking_state[2].min) * i / MAX_STEPS;
 
-        print_text("step=");
-        print_number(i);
-        print_text("encoders=");
-        print_number_signed(step_to_encoders[i * TOTAL_MOTORS + 0]);
-        print_number_signed(step_to_encoders[i * TOTAL_MOTORS + 1]);
-        print_number_signed(step_to_encoders[i * TOTAL_MOTORS + 2]);
-        print_text("\n");
-        flush_uart();
-    }
+
 
 #ifdef TEST_MODE
     menu();
@@ -1414,17 +1772,27 @@ void main()
             {
                 repeat_delay--;
             }
+            if(preset_delay > 0)
+            {
+                preset_delay--;
+            }
 
-// flash LED if disarmed
+// flash LED if disarmed or setting a preset
             if(!armed)
             {
                 led_counter++;
                 if(led_counter >= LED_DELAY)
                 {
-            
-//                    print_bin(PORTD);
-//                    print_text("\n");
-                    
+                    led_counter = 0;
+                    LED_PORT = !LED_PORT;
+                }
+            }
+            else
+            if(setting_preset)
+            {
+                led_counter++;
+                if(led_counter >= LED_DELAY2)
+                {
                     led_counter = 0;
                     LED_PORT = !LED_PORT;
                 }
@@ -1441,6 +1809,11 @@ void main()
 
 
         motor_state();
+
+        if(preset_state != 0)
+        {
+            preset_state();
+        }
     }
 
 }

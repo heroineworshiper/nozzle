@@ -35,19 +35,18 @@
 
 // mm
 // cylinder dimensions
-#define RADIUS 50.0
 #define THICKNESS 1.0
 
-#define TOP_SKIRT_LENGTH 3.0
 #define BOTTOM_SKIRT_LENGTH 2.0
 #define SKIRT_INSET 0.0
 #define SKIRT_OUTSET 2.0
+// add this to Z to make overhangs printable.  Multiple of layer height.
+#define OVERHANG_OFFSET 0.6
 
 // isogrid dimensions
 #define SLICE_LENGTH 10.0
 
-// multiple of 2 per slice
-#define ISOGRID_SEGMENTS 20
+
 #define RIB_WIDTH 2.0
 #define RIB_DEPTH 2.0
 #define RIB_DIVISIONS 5
@@ -62,11 +61,16 @@
     #define MAX_Z 30
 
 
+double radius = 50.0;
 
 // calculated values
 vector planeNormal;
 vector planePoint;
 int slices;
+// multiple of 2 per slice
+int isogrid_segments = 20;
+float top_skirt_length = 3.0;
+
 
 // clip line in polar coordinates to the clipping plane
 // returns 1 if the entire line is above the plane
@@ -237,26 +241,55 @@ void pathToRib(vector *path, int pathSize)
         // get perpendicular vector on the surface of the cylinder
         vector diff = subVectors(point1, point2);
         double perpX = diff.z;
-        double perpZ = sin(diff.x) * RADIUS;
+        double perpZ = sin(diff.x) * radius;
         double perpMag = hypot(perpX, perpZ);
         perpX = perpX / perpMag * RIB_WIDTH / 2;
         perpZ = perpZ / perpMag * RIB_WIDTH / 2;
-        vector perpVector = { -asin(perpX / RADIUS), 0, perpZ };
-        
+        vector perpVector = { -asin(perpX / radius), 0, perpZ };
+
+// outside cylinder
         edgeLoop[3] = addVectors(addVectors(point1, perpVector), depthVector);
+// inside cylinder
         edgeLoop[2] = addVectors(point1, perpVector);
+// inside cylinder
         edgeLoop[1] = subVectors(point1, perpVector);
+// outside cylinder
         edgeLoop[0] = addVectors(subVectors(point1, perpVector), depthVector);
+
+// shift bottom outside corner to make printable
+// already an angled overhang
+//         if(edgeLoop[3].z > edgeLoop[0].z)
+//         {
+//             edgeLoop[0].z += OVERHANG_OFFSET;
+//         }
+//         else
+//         {
+//             edgeLoop[3].z += OVERHANG_OFFSET;
+//         }
         edgeLoops[i] = edgeLoop;
 
 // final loop
         if(i == pathSize - 2)
         {
             vector *edgeLoop = calloc(sizeof(vector), loopPoints);
+// outside cylinder
             edgeLoop[3] = addVectors(addVectors(point2, perpVector), depthVector);
+// inside cylinder
             edgeLoop[2] = addVectors(point2, perpVector);
+// inside cylinder
             edgeLoop[1] = subVectors(point2, perpVector);
+// outside cylinder
             edgeLoop[0] = addVectors(subVectors(point2, perpVector), depthVector);
+// shift bottom outside corner to make printable
+// already an angled overhang
+//             if(edgeLoop[3].z > edgeLoop[0].z)
+//             {
+//                 edgeLoop[0].z += OVERHANG_OFFSET;
+//             }
+//             else
+//             {
+//                 edgeLoop[3].z += OVERHANG_OFFSET;
+//             }
             edgeLoops[i + 1] = edgeLoop;
         }
     }
@@ -317,7 +350,7 @@ void makeIsogrid()
     
     for(pass = 0; pass < 2; pass++)
     {
-        for(segment = 0; segment < ISOGRID_SEGMENTS; segment += 2)
+        for(segment = 0; segment < isogrid_segments; segment += 2)
         {
 // tube is divided vertically into slices
             int slice;
@@ -331,18 +364,18 @@ void makeIsogrid()
                 {
                     angle = toRad((double)((double)segment - (double)slice / RIB_DIVISIONS) * 
                         360.0 / 
-                        ISOGRID_SEGMENTS);
+                        isogrid_segments);
                 }
                 else
                 {
                     angle = toRad((double)((double)segment + (double)slice / RIB_DIVISIONS) * 
                         360.0 / 
-                        ISOGRID_SEGMENTS);
+                        isogrid_segments);
                 }
                 
                 path[slice] = (vector){ 
                     angle, 
-                    RADIUS, 
+                    radius, 
                     slice * length / slices / RIB_DIVISIONS
                 };
 
@@ -369,12 +402,12 @@ void makeIsogrid()
     }
 
 // longerons
-    for(segment = 0; segment < ISOGRID_SEGMENTS; segment++)
+    for(segment = 0; segment < isogrid_segments; segment++)
     {
-        double angle = toRad((double)segment * 360.0 / ISOGRID_SEGMENTS);
+        double angle = toRad((double)segment * 360.0 / isogrid_segments);
         vector path[2];
-        path[0] = (vector){ angle, RADIUS, 0 };
-        path[1] = (vector){ angle, RADIUS, length };
+        path[0] = (vector){ angle, radius, 0 };
+        path[1] = (vector){ angle, radius, length };
         
         if(!clipLine(&path[0], &path[1]))
         {
@@ -401,10 +434,10 @@ void makeTube()
         double angle = toRad((double)i * 360.0 / TUBE_SEGMENTS);
         vector *edgeLoop = calloc(sizeof(vector), loopPoints);
 
-        vector topInner = { angle, RADIUS, length };
-        vector topOuter = { angle, RADIUS + THICKNESS, length };
-        vector bottomInner = { angle, RADIUS };
-        vector bottomOuter = { angle, RADIUS + THICKNESS };
+        vector topInner = { angle, radius, length };
+        vector topOuter = { angle, radius + THICKNESS, length };
+        vector bottomInner = { angle, radius };
+        vector bottomOuter = { angle, radius + THICKNESS };
 
         if(clipLine(&bottomInner, &topInner) || 
             clipLine(&bottomOuter, &topOuter))
@@ -424,7 +457,7 @@ void makeTube()
 //printf("makeTube %d totalLoops=%d\n", __LINE__, totalLoops);
 
 // create skirt
-    vector topSkirtOffset = { 0, 0, TOP_SKIRT_LENGTH / 2 };
+    vector topSkirtOffset = { 0, 0, top_skirt_length / 2 };
     vector bottomSkirtOffset = { 0, 0, BOTTOM_SKIRT_LENGTH / 2 };
     vector* topSkirt[totalLoops];
     vector* bottomSkirt[totalLoops];
@@ -437,11 +470,11 @@ void makeTube()
         vector *bottomLoop = calloc(sizeof(vector), loopPoints);
         vector *srcLoop = edgeLoops[i];
     
-        vector topInner =    { angle, RADIUS - SKIRT_INSET,  length + RIB_DEPTH };
-        vector topOuter =    { angle, RADIUS + SKIRT_OUTSET, length + RIB_DEPTH };
+        vector topInner =    { angle, radius - SKIRT_INSET,  length + RIB_DEPTH };
+        vector topOuter =    { angle, radius + SKIRT_OUTSET, length + RIB_DEPTH };
 // bottom coords are needed to calculate the clipping
-        vector bottomInner = { angle, RADIUS - SKIRT_INSET,  0 };
-        vector bottomOuter = { angle, RADIUS + SKIRT_OUTSET, 0 };
+        vector bottomInner = { angle, radius - SKIRT_INSET,  0 };
+        vector bottomOuter = { angle, radius + SKIRT_OUTSET, 0 };
         if(clipLine(&bottomOuter, &topOuter) ||
             clipLine(&bottomInner, &topInner))
         {
@@ -459,9 +492,9 @@ void makeTube()
             topLoop[3] = subVectors(topOuter, topSkirtOffset);
 
 // can't 3D print a bottom edge with overhang
-            if(topLoop[3].z < topLoop[2].z + 0.5)
+            if(topLoop[3].z < topLoop[2].z + OVERHANG_OFFSET)
             {
-                topLoop[3].z = topLoop[2].z + 0.5;
+                topLoop[3].z = topLoop[2].z + OVERHANG_OFFSET;
             }
 
             topSkirt[topSkirtLoops] = topLoop;
@@ -469,11 +502,11 @@ void makeTube()
         }
         
         
-        bottomInner = (vector){ angle, RADIUS - SKIRT_INSET,  0};
-        bottomOuter = (vector){ angle, RADIUS + SKIRT_OUTSET, 0 };
+        bottomInner = (vector){ angle, radius - SKIRT_INSET,  0};
+        bottomOuter = (vector){ angle, radius + SKIRT_OUTSET, 0 };
 // top coords are needed to calculate the clipping
-        topInner =    (vector){ angle, RADIUS - SKIRT_INSET,  length + RIB_DEPTH };
-        topOuter =    (vector){ angle, RADIUS + SKIRT_OUTSET, length + RIB_DEPTH };
+        topInner =    (vector){ angle, radius - SKIRT_INSET,  length + RIB_DEPTH };
+        topOuter =    (vector){ angle, radius + SKIRT_OUTSET, length + RIB_DEPTH };
         
         if(clipLine(&bottomOuter, &topOuter) ||
             clipLine(&bottomInner, &topInner))
@@ -527,28 +560,54 @@ void makeTube()
 
 void main(int argc, char *argv[])
 {
-    if(argc < 4)
+    if(argc < 6)
     {
-        printf("Usage: tube <filename> <length> <plane angle>\n");
+        printf("Usage: tube <filename> <radius> <length> <plane angle> <isogrid segments per row>\n");
         exit(1);
     }
     
     
     char *path = argv[1];
-    length = atof(argv[2]);
-    planeAngle = toRad(atof(argv[3]));
+    radius = atof(argv[2]);
+    length = atof(argv[3]);
+    planeAngle = toRad(atof(argv[4]));
+    isogrid_segments = atoi(argv[5]);
 
-    printf("path=%s length=%f planeAngle=%f\n",
+    printf("path=%s\nradius=%f\nlength=%f\nplaneAngle=%f\nisogrid_segments=%d\n",
         path,
+        radius,
         length,
-        planeAngle);
-    slices = ((int)(length / SLICE_LENGTH));
+        planeAngle,
+        isogrid_segments);
 
+    slices = ((int)(length / SLICE_LENGTH));
+    if(fabs((float)slices * SLICE_LENGTH - length) > 0.001)
+    {
+        printf("Length must be a multiple of %f\n", SLICE_LENGTH);
+        exit(1);
+    }
+    
+    if((isogrid_segments % 2) != 0)
+    {
+        printf("isogrid_segments must be a multiple of 2\n");
+        exit(1);
+    }
+    
+
+    if(fabs(planeAngle) < 0.001)
+    {
+        top_skirt_length = BOTTOM_SKIRT_LENGTH;
+    }
+    
+    printf("Calculated values:\n");
+    printf("slices=%d\ntop_skirt_length=%f\n", 
+        slices,
+        top_skirt_length);
 
 // slope of the clipping plane Z/X
     planeSlope = tan(planeAngle);
 // where clipping plane intersects Z axis
-    planeIntercept = length + planeSlope * (RADIUS + RIB_DEPTH);
+    planeIntercept = length + planeSlope * (radius + RIB_DEPTH);
 
     open_stl(path);
 
@@ -562,8 +621,8 @@ void main(int argc, char *argv[])
 
 
 // slope vs X
-//     double x = -RADIUS;
-//     for(x = -RADIUS; x <= RADIUS; x += 10.0)
+//     double x = -radius;
+//     for(x = -radius; x <= radius; x += 10.0)
 //     {
 // //        double topX = x * cos(planeAngle);
 // //        double topZ = planeIntercept + x * sin(planeAngle);
