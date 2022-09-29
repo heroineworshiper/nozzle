@@ -49,7 +49,7 @@ int open_stl(char *path)
 {
     if((out = fopen(path, "r")))
     {
-        printf("Overwrite existing file? (y/n)\n");
+        printf("Overwrite existing file %s? (y/n)\n", path);
         char string[TEXTLEN];
         char* _ = fgets(string, TEXTLEN, stdin);
         if(strcmp(string, "y\n"))

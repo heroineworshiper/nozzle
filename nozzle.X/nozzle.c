@@ -1,6 +1,6 @@
 /*
  * F-35 NOZZLE CONTROLLER
- * Copyright (C) 2020-2021 Adam Williams <broadcast at earthling dot net>
+ * Copyright (C) 2020-2022 Adam Williams <broadcast at earthling dot net>
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -136,7 +136,7 @@ sensor_state_t sensors[TOTAL_ADC];
 
 typedef struct
 {
-// ADC of the sensors
+// ADC channel of the sensors
     uint8_t boundary;
     uint8_t encoder;
 // H bridge bitmasks of the 2 directions
@@ -147,12 +147,12 @@ typedef struct
 
 // ticks remaneing to sleep
     uint8_t timer;
-    int8_t target_position;
+    int16_t target_position;
 // position range
-    int8_t min;
-    int8_t max;
+    int16_t min;
+    int16_t max;
 // only move the motors if this is > 0
-    uint8_t changed;
+    uint16_t changed;
 // use the brake instead of coasting.  Outlet is light enough to use braking.
     uint8_t brake;
 } tracking_state_t;
@@ -160,10 +160,10 @@ tracking_state_t tracking_state[TOTAL_MOTORS];
 
 
 // pitch of the nozzle in polar coordinates
-int8_t nozzle_pitch = 0;
+int16_t nozzle_pitch = 0;
 // user position of motor 0 to which the nozzle_pitch adds an offset to compensate
 // for the nozzle bending sideways
-int8_t nozzle_angle = 0;
+int16_t nozzle_angle = 0;
 
 #ifdef XY_CONTROL
 // nozzle direction in XY coordinates
@@ -183,8 +183,8 @@ const int8_t neighbor_angle[] = { -1, 1,  0, 0 };
 
 typedef struct
 {
-    int8_t pitch;
-    int8_t angle;
+    int16_t pitch;
+    int16_t angle;
 } preset_t;
 
 // location in EEPROM of presets
@@ -195,7 +195,7 @@ uint8_t setting_preset = 0;
 uint8_t current_preset = 0;
 preset_t presets[PRESETS];
 void (*preset_state)() = 0;
-int8_t orig_nozzle_angle = 0;
+int16_t orig_nozzle_angle = 0;
 uint8_t preset_delay = 0;
 
 
@@ -702,14 +702,15 @@ void update_motors()
         nozzle_pitch = 0;
     }
 
-    if(nozzle_angle > ANGLE_STEPS)
-    {
-        nozzle_angle = ANGLE_STEPS;
-    }
-    if(nozzle_angle < 0)
-    {
-        nozzle_angle = 0;
-    }
+// don't limit the nozzle angle
+//     if(nozzle_angle > ANGLE_STEPS)
+//     {
+//         nozzle_angle = ANGLE_STEPS;
+//     }
+//     if(nozzle_angle < 0)
+//     {
+//         nozzle_angle = 0;
+//     }
 
 
     tracking_state[0].target_position = nozzle_angle +
@@ -719,20 +720,21 @@ void update_motors()
     tracking_state[2].target_position = 
         step_to_encoders[nozzle_pitch * TOTAL_MOTORS + 2];
 
-    if(tracking_state[0].target_position < tracking_state[0].min)
-    {
-        int8_t diff = tracking_state[0].min - tracking_state[0].target_position;
-        tracking_state[0].target_position += diff;
-// clamp radial position based on the nozzle step
-        nozzle_angle += diff;
-    }
-    if(tracking_state[0].target_position > tracking_state[0].max)
-    {
-        int8_t diff = tracking_state[0].target_position - tracking_state[0].max;
-        tracking_state[0].target_position -= diff;
-// clamp radial position based on the nozzle step
-        nozzle_angle -= diff;
-    }
+// disable limits for nozzle angle
+//     if(tracking_state[0].target_position < tracking_state[0].min)
+//     {
+//         int8_t diff = tracking_state[0].min - tracking_state[0].target_position;
+//         tracking_state[0].target_position += diff;
+// // clamp radial position based on the nozzle step
+//         nozzle_angle += diff;
+//     }
+//     if(tracking_state[0].target_position > tracking_state[0].max)
+//     {
+//         int8_t diff = tracking_state[0].target_position - tracking_state[0].max;
+//         tracking_state[0].target_position -= diff;
+// // clamp radial position based on the nozzle step
+//         nozzle_angle -= diff;
+//     }
 
 
     if(tracking_state[0].changed < 0xff)
@@ -1074,11 +1076,12 @@ void handle_ir_code()
                 nozzle_x = neighbor_y[best_neighbor])
             
 #else // XY_CONTROL
-            if(nozzle_angle < tracking_state[0].max)
-            {
-                nozzle_angle++;
-                update_motors();
-            }
+// disable limits for nozzle angle
+//              if(nozzle_angle < tracking_state[0].max)
+//              {
+                  nozzle_angle++;
+                  update_motors();
+//              }
 #endif // !XY_CONTROL
             break;
 
@@ -1093,11 +1096,12 @@ void handle_ir_code()
                 nozzle_x = neighbor_y[best_neighbor])
             
 #else // XY_CONTROL
-            if(nozzle_angle > tracking_state[0].min)
-            {
-                nozzle_angle--;
-                update_motors();
-            }
+// disable limits for nozzle angle
+//             if(nozzle_angle > tracking_state[0].min)
+//             {
+                 nozzle_angle--;
+                 update_motors();
+//             }
 #endif // !XY_CONTROL
             break;
         
@@ -1399,7 +1403,11 @@ void menu()
     print_text("t - straight\n");
     flush_uart();
     print_text("SPACE - stop\n");
-    
+    print_text("nozzle_angle=");
+    print_number_nospace(nozzle_angle);
+    print_text(" nozzle_pitch=");
+    print_number_nospace(nozzle_pitch);
+    print_text("\n");
 }
 
 void handle_menu()
