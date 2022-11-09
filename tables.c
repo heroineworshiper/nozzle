@@ -18,7 +18,7 @@
  * 
  */
 
-// compute tables for encoder positions
+// compute tables for home made encoder positions
 // gcc -o tables tables.c -lm
 // ./tables
 

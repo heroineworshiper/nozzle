@@ -778,7 +778,7 @@ void do_preset_pitch()
     if(!motors_tracking())
     {
 // advance to pitch
-        int8_t want_pitch = presets[current_preset].pitch;
+        int16_t want_pitch = presets[current_preset].pitch;
         if(want_pitch > nozzle_pitch)
         {
             nozzle_pitch++;
@@ -811,7 +811,7 @@ void do_preset_angle()
     if(!motors_tracking())
     {
 // advance to angle
-        int8_t want_angle = presets[current_preset].angle;
+        int16_t want_angle = presets[current_preset].angle;
         if(want_angle > nozzle_angle)
         {
             nozzle_angle++;

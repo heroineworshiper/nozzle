@@ -1,5 +1,5 @@
 F-35 NOZZLE
-Copyright (C) 2020 Adam Williams <broadcast at earthling dot net>
+Copyright (C) 2020-2022 Adam Williams <broadcast at earthling dot net>
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -20,41 +20,99 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 What you'll find here:
 
-nozzle.pcb - layout of the electronicals
-nozzle.X - firmware for the electronicals
+nozzle.pcb - obsolete layout of the electronicals
+nozzle.X - obsolete firmware for the electronicals
 
-final.FCStd - latest tubes.  
-    Everything else except where motors attach to tubes is outdated.
-motor.FCStd - latest motor parts
+nozzle.c - atmega328 firmware for common motor controller
+nozzle5.pcb - layout of common motor controller
+
+export*.FCMacro: obsolete scripts
+
+final.FCStd - print tube segments with motor attachments
+
+monitor.c - dump debugging statements from serial port without motor polling commands
+
+motor2.FCStd - latest motor assembly
+
 base.FCStd - base + electronical platform
-bearing.FCStd - latest bearing parts
+
+bearing2.FCStd - latest bearing parts.  
+    Mane gear must be 2 parts to be installed.
+    Print mane gear ORed with print mask.  Print mask must be rotated 180 deg 
+    not cut in order to get the horizontal expansion gap.
+    Print bearing inner, bearing outer
+
 
 tube.c - generate isogrid tubes
-exit.c - generate the exit nozzle
+
+elbow1.FCStd: model for elbow1 & elbow3 segments
+ - the 2 elbow segments with motors use identical tube sections
+ - must transfer to final.FCStd & print with motor mounts
+ - subtract inside from motor mount but don't print it
+ - remove support after printing
+
+elbow2.FCStd: print to get elbow2
+    - support is on opposite side as elbow1
+    - remove support after printing
+    - must glue elbow2 & elbow3 so the short & long sides line up
+
+exit.c - generate the exit nozzle to be combined with exit.FCStd
+    Run exit to generate exit.stl
+
+exit.FCSTd:
+    - print tube & exit separately from here
+    - remove support after printing
+    - clip off chevron support
+
+
+final.FCStd: print segments with motors from here
+    - inlet + inlet motor mount
+    - elbow1 + elbow1 motor mount
+    - elbow3 + elbow3 motor mount
+    - other segments are only shown to aid alignment
+    - must glue elbow2 & elbow3 so the short & long sides line up
+
+inlet.FCStd: model for inlet segment
+    - must transfer to final.FCStd & print with motor mount
+
 3dstuff.h - common 3D functions
 
 
+
+
+
+
+--------------------------------------------------------------------------------
+Programming the common motor controller:
+
+Set the board number in nozzle.h
+make clean
+
+Program the bootloader
+make nozzle_fuse
+make bootloader_isp
+
+
+
+
+
+
+--------------------------------------------------------------------------------
+Previous notes:
 
 This design used leftover motors without encoders from polulu.  An
 easier design would use gearmotors with built in encoders from
 adafruit.com.  Lighter motors are better.  100:1 or more is better.
 
-The base doesn't support it when it's sideways.  It needs a metal tube
-inside the 1st isogrid to point sideways.
-
-Parts must be exported in STL format from a bunch of places.
-Print small parts 1st to test fit.
 The latest versions of each part are listed here.
-Only use raft with 2mm margin + support touching base when necessary.
 25% infill
-Tube sections have a convex overhang on 1 end to avoid support.
-    That must be printed on top.
+
 
 standalone motor parts:
      - print with no raft
      - 50% infill
      - Support must be everywhere instead of just touching base
-    motor.FCStd
+    motor2.FCStd
         pinion
         top platform
         strap
@@ -74,16 +132,6 @@ tubes with motor parts:
          - hot glued on
          - Print the laminations perpendicular to the motor axis
          - use a brim to aid separating the support
-
-bare tubes:
-    final.FCStd
-        elbow
-        exit elbow
-        - Print with a brim & support to aid the 1mm alignment rings
-        
-exit nozzle:
-    exit
-    - print with support & brim to aid the chevrons
 
 bearing parts:
      - print with no raft or support to get flat sides
