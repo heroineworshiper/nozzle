@@ -419,106 +419,104 @@ void motor_tracking()
 }
 
 
-// // wait a while
-// void motor_home6()
-// {
-//     tracking_state_t *tracking = &tracking_state[current_motor];
-//     if(tracking->timer == 0)
-//     {
-//         uint8_t current_encoder = tracking->encoder;
-// 
-//         switch(current_motor)
-//         {
-//             case 2:
-//                 current_motor = 1;
-//                 motor_state = motor_home1;
-//                 break;
-//             case 1:
-//                 current_motor = 0;
-//                 motor_state = motor_home1;
-//                 break;
-//             case 0:
-//             default:
-//                 current_motor = 0;
-//                 motor_state = motor_tracking;
-// // pitch is always 0 after homing
-//                 nozzle_yaw = tracking->target_position;
-//                 print_status();
-//                 break;
-//         }
-//     }
-// }
-// 
-// // wait until home position
-// void motor_home5()
-// {
-//     tracking_state_t *tracking = &tracking_state[current_motor];
-//     if(tracking->encoder >= tracking->target_position)
-//     {
-// // brake
-//         motor_master |= tracking->total_mask;
-// 
-//         tracking->timer = MOTOR_DELAY;
-//         motor_state = motor_home6;
-//     }
-// }
-// 
-// // go until boundary is detected again
-// void motor_home4()
-// {
-//     tracking_state_t *tracking = &tracking_state[current_motor];
-//     if(ABS(tracking->boundary - HALL_CENTER) >= HALL_THRESHOLD)
-//     {
-// // reset encoder
-//         tracking->encoder = 0;
-//         motor_state = motor_home5;
-//     }
-// }
-// 
-// // coast
-// void motor_home3()
-// {
-//     tracking_state_t *tracking = &tracking_state[current_motor];
-//     if(tracking->timer == 0)
-//     {
-//         motor_master &= tracking->total_unmask;
-//         motor_master |= tracking->inc_mask;
-//         motor_state = motor_home4;
-//     }
-// }
-// 
-// // detect motor boundary & overshoot
-// void motor_home2()
-// {
-//     tracking_state_t *tracking = &tracking_state[current_motor];
-//     if(ABS(tracking->boundary - HALL_CENTER) >= HALL_THRESHOLD)
-//     {
-// // always coast
-//         motor_master &= tracking->total_unmask;
-//         motor_state = motor_home3;
-//         tracking->timer = MOTOR_DELAY;
-//     }
-// }
-// 
-// // go to home position
-// void motor_home1()
-// {
-//     tracking_state_t *tracking = &tracking_state[current_motor];
-//     uint8_t sensor_value = tracking->boundary;
-// // sensor is already on boundary.  Abort.
-// // It can't arm if any sensors are on their boundary.
-//     if(ABS(tracking->boundary - HALL_CENTER) >= HALL_THRESHOLD)
-//     {
-//         motor_state = motor_idle;
-//     }
-//     else
-// // command motor to move to boundary
-//     {
-//         motor_master &= tracking->total_unmask;
-//         motor_master |= tracking->dec_mask;
-//         motor_state = motor_home2;
-//     }
-// }
+// wait a while
+void motor_home6()
+{
+    tracking_state_t *tracking = &tracking_state[current_motor];
+    if(tracking->timer == 0)
+    {
+        uint8_t current_encoder = tracking->encoder;
+
+        switch(current_motor)
+        {
+            case 2:
+                current_motor = 1;
+                motor_state = motor_home1;
+                break;
+            case 1:
+                current_motor = 0;
+                motor_state = motor_home1;
+                break;
+            case 0:
+            default:
+                current_motor = 0;
+                motor_state = motor_tracking;
+// pitch is always 0 after homing
+                nozzle_yaw = tracking->target_position;
+                print_status();
+                break;
+        }
+    }
+}
+
+// wait until home position
+void motor_home5()
+{
+    tracking_state_t *tracking = &tracking_state[current_motor];
+    if(tracking->encoder >= tracking->target_position)
+    {
+// brake
+        motor_master |= tracking->total_mask;
+
+        tracking->timer = MOTOR_DELAY;
+        motor_state = motor_home6;
+    }
+}
+
+// go until boundary is detected again
+void motor_home4()
+{
+    tracking_state_t *tracking = &tracking_state[current_motor];
+    if(ABS(tracking->boundary - HALL_CENTER) >= HALL_THRESHOLD)
+    {
+// reset encoder
+        tracking->encoder = 0;
+        motor_state = motor_home5;
+    }
+}
+
+// reverse
+void motor_home3()
+{
+    tracking_state_t *tracking = &tracking_state[current_motor];
+    if(ABS(tracking->boundary - HALL_CENTER) < HALL_THRESHOLD)
+    {
+// always coast
+        motor_master &= tracking->total_unmask;
+        motor_master |= tracking->inc_mask;
+        motor_state = motor_home4;
+    }
+}
+
+// detect motor boundary & overshoot
+void motor_home2()
+{
+    tracking_state_t *tracking = &tracking_state[current_motor];
+    if(ABS(tracking->boundary - HALL_CENTER) >= HALL_THRESHOLD)
+    {
+        motor_state = motor_home3;
+    }
+}
+
+// go to home position
+void motor_home1()
+{
+    tracking_state_t *tracking = &tracking_state[current_motor];
+    uint8_t sensor_value = tracking->boundary;
+// sensor is already on boundary.  Abort.
+// It can't arm if any sensors are on their boundary.
+    if(ABS(tracking->boundary - HALL_CENTER) >= HALL_THRESHOLD)
+    {
+        motor_state = motor_idle;
+    }
+    else
+// command motor to move to boundary
+    {
+        motor_master &= tracking->total_unmask;
+        motor_master |= tracking->dec_mask;
+        motor_state = motor_home2;
+    }
+}
 
 void motor_home()
 {
@@ -619,18 +617,18 @@ void arm_motors()
     tracking_state[1].changed = 0;
     tracking_state[2].changed = 0;
 
-// command all 3 to move simultaneously
-    motor_master = tracking_state[0].dec_mask |
-        tracking_state[1].dec_mask |
-        tracking_state[2].dec_mask;
-    for(i = 0; i < TOTAL_MOTORS; i++)
-    {
-        tracking_state[i].homing = 1;
-    }
-    motor_state = motor_home;   
+// command all 3 to move simultaneously.  Glitches in board 1 when horizontal
+//     motor_master = tracking_state[0].dec_mask |
+//         tracking_state[1].dec_mask |
+//         tracking_state[2].dec_mask;
+//     for(i = 0; i < TOTAL_MOTORS; i++)
+//     {
+//         tracking_state[i].homing = 1;
+//     }
+//     motor_state = motor_home;   
 
 // move 1 at a time
-//    motor_state = motor_home1;
+    motor_state = motor_home1;
 }
 
 void disarm_motors()
@@ -1348,7 +1346,7 @@ void main()
                 {
                     debug_counter = 0;
 // print the status
-//                    print_status();
+                    print_status();
                 }
                 handle_debug();
             }

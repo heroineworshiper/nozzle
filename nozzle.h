@@ -40,7 +40,7 @@
 #define LED_OFF PORTB |= (1 << PORTB5);
 
 // encoder values for the home positions
-// rebuild tables2.c & table.h
+// rebuild tables2.c & table.h if you change this
 #define HOME0 8052
 #define HOME1 4013
 #define HOME2 5428

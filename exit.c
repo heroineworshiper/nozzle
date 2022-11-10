@@ -50,7 +50,7 @@
 #define FRONT_INSET 5
 
 // same as tube thickness
-#define THICKNESS 2.0
+#define THICKNESS 1.0
 
 void thickTriangle(vector coord1, vector coord2, vector coord3, int rearFace)
 {
