@@ -38,7 +38,6 @@
 #define BAUD 115200L
 
 // the UART buffer is sent at deterministic times
-#define UART_SIZE 64
 uint8_t uart_buffer[UART_SIZE];
 uint8_t uart_used = 0;
 uint8_t uart_write_ptr = 0;
@@ -56,16 +55,16 @@ volatile uint8_t have_uart_in = 0;
 volatile uint8_t uart_in = 0;
 
 // send data to the UART buffer
-void send_uart(uint8_t *text, uint8_t size)
-{
-	uint8_t i;
-	for(i = 0; uart_used < UART_SIZE && i < size; i++)
-	{
-		uart_buffer[uart_write_ptr++] = text[i];
-		uart_used++;
-		if(uart_write_ptr >= UART_SIZE) uart_write_ptr = 0;
-	}
-}
+// void send_uart(uint8_t *text, uint8_t size)
+// {
+// 	uint8_t i;
+// 	for(i = 0; uart_used < UART_SIZE && i < size; i++)
+// 	{
+// 		uart_buffer[uart_write_ptr++] = text[i];
+// 		uart_used++;
+// 		if(uart_write_ptr >= UART_SIZE) uart_write_ptr = 0;
+// 	}
+// }
 
 // send data to the debug buffer
 void print_text(char *text)
@@ -130,44 +129,44 @@ void print_hex(uint8_t x)
 }
 
 
-void handle_serial()
-{
-	if(uart_used) 
-	{
-// enable transmit mode.  disable receive mode
-        if(!bitRead(UCSR0B, TXEN0))
-        {
-            bitSet(UCSR0B, TXEN0);
-            bitClear(UCSR0B, RXEN0);
-        }
-
-
-	    if(bitRead(UCSR0A, UDRE0)) 
-	    {
-			bitSet(UCSR0A, UDRE0); 
-			UDR0 = uart_buffer[uart_read_ptr++]; 
-			if(uart_read_ptr >= UART_SIZE) uart_read_ptr = 0; 
-			uart_used--; 
-	    }
-
-	}
-    else
-    {
-// disable transmit mode.  enable receive mode
-        if(bitRead(UCSR0B, TXEN0))
-        {
-// last byte transmitted
-            if(bitRead(UCSR0A, TXC0))
-            {
-                bitSet(UCSR0A, TXC0);
-                bitClear(UCSR0B, TXEN0);
-                bitSet(UCSR0B, RXEN0);
-            }
-        }
-
-
-    }
-}
+// void handle_serial()
+// {
+// 	if(uart_used) 
+// 	{
+// // enable transmit mode.  disable receive mode
+//         if(!bitRead(UCSR0B, TXEN0))
+//         {
+//             bitSet(UCSR0B, TXEN0);
+//             bitClear(UCSR0B, RXEN0);
+//         }
+// 
+// 
+// 	    if(bitRead(UCSR0A, UDRE0)) 
+// 	    {
+// 			bitSet(UCSR0A, UDRE0); 
+// 			UDR0 = uart_buffer[uart_read_ptr++]; 
+// 			if(uart_read_ptr >= UART_SIZE) uart_read_ptr = 0; 
+// 			uart_used--; 
+// 	    }
+// 
+// 	}
+//     else
+//     {
+// // disable transmit mode.  enable receive mode
+//         if(bitRead(UCSR0B, TXEN0))
+//         {
+// // last byte transmitted
+//             if(bitRead(UCSR0A, TXC0))
+//             {
+//                 bitSet(UCSR0A, TXC0);
+//                 bitClear(UCSR0B, TXEN0);
+//                 bitSet(UCSR0B, RXEN0);
+//             }
+//         }
+// 
+// 
+//     }
+// }
 
 // send out a debug packet
 void handle_debug()

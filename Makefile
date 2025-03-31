@@ -3,7 +3,7 @@ AVR_GCC := $(AVR_DIR)avr-gcc
 AVR_OBJCOPY := $(AVR_DIR)avr-objcopy -j .text -j .data -O ihex
 # use the baud rate your arduino ISP was hacked to
 AVR_DUDE := avrdude -v -patmega328p -cstk500v1 -P/dev/ttyACM0 -b19200
-AVR_DUDE2 := avrdude -v -patmega8 -cstk500v1 -P/dev/ttyACM0 -b115200
+AVR_DUDE2 := avrdude -v -patmega8 -cstk500v1 -P/dev/ttyACM0 -b19200
 AVR_CFLAGS := -O2 -mmcu=atmega328p
 AVR_CFLAGS2 := -O2 -mmcu=atmega8
 AVR_LFLAGS := -O2 -mmcu=atmega328p -Wl,--section-start=.text=0x0000 -nostdlib

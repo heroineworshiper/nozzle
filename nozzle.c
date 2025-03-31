@@ -1,6 +1,6 @@
 /*
  * F-35 COMMON NOZZLE BOARD
- * Copyright (C) 2020-2022 Adam Williams <broadcast at earthling dot net>
+ * Copyright (C) 2020-2025 Adam Williams <broadcast at earthling dot net>
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,6 +27,10 @@
 // make board1_isp
 // make board2_isp
 
+// disable this to try to reduce encoder drift
+//#define ENABLE_DEBUG
+// disable this to actually see the debugging output
+#define ENABLE_POLLING
 
 
 #include "uart.h"
@@ -85,6 +89,10 @@ const uint8_t top_right_data[] =
 { 4,4,1,4,1,1,1,1,4,1,4,1,4,4,4,4,1,4,1,4,1,1,4,4,4,1,4,1,4,4,1,1,1 };
 const uint8_t top_left_data[] = 
 { 4,4,1,4,1,1,1,1,4,1,4,1,4,4,4,4,1,1,1,4,1,1,4,4,4,4,4,1,4,4,1,1,1 };
+const uint8_t enter_data[] =
+{ 4,4,1,4,1,1,1,1,4,1,4,1,4,4,4,4,1,4,1,4,4,1,4,4,4,1,4,1,1,4,1,1,1 };
+const uint8_t clear_data[] =
+{ 4,4,1,4,1,1,1,1,4,1,4,1,4,4,4,4,1,4,1,1,4,1,4,1,4,1,4,4,1,4,1,4,1 };
 
 
 
@@ -98,6 +106,8 @@ const uint8_t top_left_data[] =
 #define PRESET2 7
 #define PRESET3 8
 #define PRESET4 9
+#define PRESET5 12
+#define PRESET6 13
 #define TOP_LEFT 10
 #define TOP_RIGHT 11
 
@@ -107,6 +117,8 @@ const ir_code_t ir_codes[] = {
     { num8_data, PRESET2 },
     { num9_data, PRESET3 },
     { num0_data, PRESET4 },
+    { enter_data, PRESET5 },
+    { clear_data, PRESET6 },
     { up_data,   UP },
 	{ down_data,  DOWN },
 	{ left_data,  LEFT },
@@ -119,6 +131,7 @@ const ir_code_t ir_codes[] = {
 
 #define CODE_SIZE sizeof(up_data)
 uint8_t code_buffer[CODE_SIZE];
+uint8_t polling_packet[3];
 
 // ticks
 // 120ms observed.
@@ -148,7 +161,7 @@ typedef struct
     int16_t angle;
 } preset_t;
 
-#define PRESETS 4
+#define PRESETS 6
 #define PRESET_DELAY (HZ / 2)
 uint8_t setting_preset = 0;
 uint8_t current_preset = 0;
@@ -249,25 +262,66 @@ uint8_t motor_master = 0;
 
 
 #if BOARD == 0
+#define HANDLE_ENCODER0 \
+    tracking_state[0].encoder += encoder_count * tracking_state[0].sign; \
+    encoder_count = 0;
+#else
+#define HANDLE_ENCODER0 ;
+#endif
 
 
+#define HANDLE_ENCODERS \
+{ \
+    uint8_t current_encoder = PINC & 0b00001100; \
+    if(current_encoder != prev_encoder) \
+    { \
+        if(current_encoder == 0b00001000 && \
+            prev_encoder == 0b00001100) \
+        { \
+            encoder_count++; \
+        } \
+        else \
+        if(current_encoder == 0b00001100 && \
+            prev_encoder == 0b00001000) \
+        { \
+            encoder_count--; \
+        } \
+        prev_encoder = current_encoder; \
+ \
+        HANDLE_ENCODER0 \
+ \
+/* print_number(bitRead(PINC, 2)); */ \
+/* print_number(bitRead(PINC, 3)); */ \
+/* print_number(encoder_count); */ \
+/* print_text("\n"); */ \
+    } \
+}
+
+#if BOARD == 0
+
+#ifdef ENABLE_DEBUG
 void print_status()
 {
-    print_text("BOARD0: ");
-    print_number(tracking_state[0].encoder);
-    print_number(tracking_state[0].boundary);
-    print_text("BOARD1: ");
-    print_number(tracking_state[1].encoder);
-    print_number(tracking_state[1].boundary);
-    print_text("BOARD2: ");
-    print_number(tracking_state[2].encoder);
-    print_number(tracking_state[2].boundary);
-    print_text("YAW=");
-    print_number(nozzle_yaw);
-    print_text("PITCH=");
-    print_number(nozzle_pitch);
-    print_text("\n");
+//     print_text("BOARD0: ");
+//     print_number(tracking_state[0].encoder);
+//     print_number(tracking_state[0].boundary);
+//     print_text("BOARD1: ");
+//     print_number(tracking_state[1].encoder);
+//     print_number(tracking_state[1].boundary);
+//     print_text("BOARD2: ");
+//     print_number(tracking_state[2].encoder);
+//     print_number(tracking_state[2].boundary);
+//     print_text("YAW=");
+//     print_number(nozzle_yaw);
+//     print_text("PITCH=");
+//     print_number(nozzle_pitch);
+//     print_text("\n");
 }
+#else
+#define print_status() \
+    ;
+#endif
+
 
 // update the tracking states to get the desired nozzle pitch & roll
 void update_motors()
@@ -299,16 +353,21 @@ void update_motors()
 }
 
 // return 1 if the motors are tracking
-uint8_t motors_tracking()
-{
-    if(tracking_state[0].changed > 0 ||
-        tracking_state[1].changed > 0 ||
+// uint8_t motors_tracking()
+// {
+//     if(tracking_state[0].changed > 0 ||
+//         tracking_state[1].changed > 0 ||
+//         tracking_state[2].changed > 0)
+//     {
+//         return 1;
+//     }
+//     return 0;
+// }
+
+#define MOTORS_TRACKING \
+    (tracking_state[0].changed > 0 || \
+        tracking_state[1].changed > 0 || \
         tracking_state[2].changed > 0)
-    {
-        return 1;
-    }
-    return 0;
-}
 
 void motor_tracking()
 {
@@ -637,6 +696,8 @@ void disarm_motors()
     motor_state = motor_idle;
 }
 
+
+
 // IR interrupt
 ISR(INT0_vect)
 {
@@ -653,7 +714,7 @@ void read_presets()
     print_text("read_presets: ");
     for(i = 0; i < sizeof(presets); i++)
     {
-// EEPROM address
+// EEPROM address.  page 22
         EEARH = 0;
         EEARL = i;
 // read command
@@ -703,60 +764,48 @@ void do_preset_save2()
 
 void do_preset_save1()
 {
-    if(!motors_tracking())
-    {
-        preset_delay = PRESET_DELAY;
-        preset_state = do_preset_save2;
-    }
+    preset_delay = PRESET_DELAY;
+    preset_state = do_preset_save2;
 }
 
 void do_preset_pitch()
 {
-    if(!motors_tracking())
+    if(nozzle_pitch < presets[current_preset].pitch)
     {
-        if(nozzle_pitch < presets[current_preset].pitch)
-        {
-            nozzle_pitch++;
-            update_motors();
-        }
-        else
-        {
+        nozzle_pitch++;
+        update_motors();
+    }
+    else
+    {
 // done
-            preset_state = 0;
-            LED_ON
-        }
+        preset_state = 0;
+        LED_ON
     }
 }
 
 void do_preset_yaw()
 {
-    if(!motors_tracking())
-    {
-        nozzle_yaw = presets[current_preset].angle;
-        update_motors();
-        preset_state = do_preset_pitch;
-    }
+    nozzle_yaw = presets[current_preset].angle;
+    update_motors();
+    preset_state = do_preset_pitch;
 }
 
 void do_preset_center()
 {
 // wait for motors to finish
-    if(!motors_tracking())
-    {
 // go to preset in 1 motion
 //         nozzle_yaw = presets[current_preset].angle;
 //         nozzle_pitch = presets[current_preset].pitch;
 //         update_motors();
 //         preset_state = 0;
 // center it 1 step at a time
-        if(nozzle_pitch > 0)
-        {
-            nozzle_pitch--;
-            update_motors();
-        }
-        else
-            preset_state = do_preset_yaw;
+    if(nozzle_pitch > 0)
+    {
+        nozzle_pitch--;
+        update_motors();
     }
+    else
+        preset_state = do_preset_yaw;
 }
 
 
@@ -943,6 +992,14 @@ void handle_ir_code()
             handle_preset_button(3);
             break;
 
+        case PRESET5:
+            handle_preset_button(4);
+            break;
+
+        case PRESET6:
+            handle_preset_button(5);
+            break;
+
 // no repeat
         case POWER:
             setting_preset = 0;
@@ -960,146 +1017,280 @@ void handle_ir_code()
 	}
 }
 
-void handle_ir()
+
+
+// void handle_ir()
+// {
+//     uint8_t i;
+// // IR timed out
+//     if(ir_timeout == 0)
+//     {
+// 		code_offset = 0;
+// 
+// 
+//         if(have_ir)
+//         {
+// // get latest positions to stop continuous motion
+//             if(armed && repeating_code != 0xff)
+//             {
+//                 for(i = 0; i < TOTAL_MOTORS; i++)
+//                 {
+//                     tracking_state[i].target_position = 
+//                         tracking_state[i].encoder;
+//                 }
+// 
+// // subtract pitch table value to get yaw
+//                 nozzle_yaw = tracking_state[0].encoder - 
+//                     pitch_to_encoders[nozzle_pitch * 3 + 0];
+// // nozzle_pitch is updated in handle_tracking
+//                 print_status();
+//             }
+//             else
+//                 print_status();
+// 
+// // stop LED
+//             if(armed && 
+//                 !setting_preset &&
+//                 preset_state == 0)
+//                 LED_ON
+// 
+// // stop motors
+//             if(!armed)
+//             {
+//                 motor_master = 0;
+//             }
+// 
+//     		have_ir = 0;
+//             repeating_code = 0xff;
+//         }
+//     }
+// 
+// 
+// 
+// // repeat IR code after 1st delay & motors are all in braking mode
+//     if(have_ir && 
+//         repeat_delay == 0 &&
+//         ir_code != POWER &&
+//         ir_code != SET_PRESET)
+//     {
+// //print_text("IR repeat\n");
+//         repeat_delay = REPEAT_DELAY2;
+//         if(armed) repeating_code = ir_code;
+//         handle_ir_code();
+//     }
+// 
+// 
+//     if(got_ir_int)
+//     {
+//         got_ir_int = 0;
+// // 5 total symbols observed but we only use 2
+// 
+// //        if(ir_time > 117) 
+// //            ir_time = 4;
+// //        else
+// //        if(ir_time > 62) 
+// //            ir_time = 3;
+// //        else
+// //        if(ir_time > 55) 
+// //            ir_time = 2;
+// //        else
+// //        if(ir_time > 22) 
+// //            ir_time = 1;
+// //        else
+// //            ir_time = 0;
+// 
+// 
+//         if(ir_time > 55)
+//             ir_time = 4;
+//         else
+//             ir_time = 1;
+// 
+// //print_number(ir_time);
+//         ir_timeout = IR_TIMEOUT;
+//         
+//         
+//         if(!have_ir)
+//         {
+//             code_buffer[code_offset++] = ir_time;
+//             if(code_offset >= CODE_SIZE)
+//             {
+// // end of code
+// // search for the code
+// 	            uint8_t i, j;
+// // got complete code
+// 	            uint8_t got_it = 0;
+// 	            for(i = 0; i < TOTAL_CODES && !got_it; i++)
+// //	            for(i = 0; i < 5 && !got_it; i++)
+//                 {
+//                     const ir_code_t *code = &ir_codes[i];
+//                     const uint8_t *data = code->data;
+//                     got_it = 1;
+// // ignore 1st byte
+//                     for(j = 1; j < CODE_SIZE; j++)
+//                     {
+// // print_number(data[j]);
+// // print_text("=");
+// // print_number(code_buffer[j]);
+// // print_text("\n");
+//                         if(data[j - 1] != code_buffer[j])
+//                         {
+//                             got_it = 0;
+//                             break;
+//                         }
+//                     }
+// 
+//                     if(got_it)
+//                     {
+// // print_text("i=");
+// // print_number(i);
+// // print_text("\n");
+// 					    have_ir = 1;
+//                         repeat_delay = REPEAT_DELAY;
+// 					    ir_code = code->value;
+//                         handle_ir_code();
+//                     }
+//                 }
+// 
+//                 if(!got_it)
+//                 {
+//                     code_offset = 0;
+//                 }
+//             }
+//         }
+//     }
+// }
+
+void ir_stopped()
 {
     uint8_t i;
-// IR timed out
-    if(ir_timeout == 0)
-    {
-		code_offset = 0;
-
-
-        if(have_ir)
-        {
 // get latest positions to stop continuous motion
-            if(armed && repeating_code != 0xff)
-            {
-                for(i = 0; i < TOTAL_MOTORS; i++)
-                {
-                    tracking_state[i].target_position = 
-                        tracking_state[i].encoder;
-                }
+    if(armed && repeating_code != 0xff)
+    {
+        for(i = 0; i < TOTAL_MOTORS; i++)
+        {
+            tracking_state[i].target_position = 
+                tracking_state[i].encoder;
+        }
 
 // subtract pitch table value to get yaw
-                nozzle_yaw = tracking_state[0].encoder - 
-                    pitch_to_encoders[nozzle_pitch * 3 + 0];
+        nozzle_yaw = tracking_state[0].encoder - 
+            pitch_to_encoders[nozzle_pitch * 3 + 0];
 // nozzle_pitch is updated in handle_tracking
-                print_status();
-            }
-            else
-                print_status();
+        print_status();
+    }
+    else
+        print_status();
 
 // stop LED
-            if(armed && 
-                !setting_preset &&
-                preset_state == 0)
-                LED_ON
+    if(armed && 
+        !setting_preset &&
+        preset_state == 0)
+        LED_ON
 
 // stop motors
-            if(!armed)
-            {
-                motor_master = 0;
-            }
-
-    		have_ir = 0;
-            repeating_code = 0xff;
-        }
+    if(!armed)
+    {
+        motor_master = 0;
     }
 
+    have_ir = 0;
+    repeating_code = 0xff;
+}
 
-
-// repeat IR code after 1st delay & motors are all in braking mode
-    if(have_ir && 
-        repeat_delay == 0 &&
-        ir_code != POWER &&
-        ir_code != SET_PRESET)
-    {
-//print_text("IR repeat\n");
-        repeat_delay = REPEAT_DELAY2;
-        if(armed) repeating_code = ir_code;
-        handle_ir_code();
-    }
-
-
-    if(got_ir_int)
-    {
-        got_ir_int = 0;
+void ir_interrupt()
+{
+    got_ir_int = 0;
 // 5 total symbols observed but we only use 2
-
-//        if(ir_time > 117) 
-//            ir_time = 4;
-//        else
-//        if(ir_time > 62) 
-//            ir_time = 3;
-//        else
-//        if(ir_time > 55) 
-//            ir_time = 2;
-//        else
-//        if(ir_time > 22) 
-//            ir_time = 1;
-//        else
-//            ir_time = 0;
-
-
-        if(ir_time > 55)
-            ir_time = 4;
-        else
-            ir_time = 1;
+    if(ir_time > 55)
+        ir_time = 4;
+    else
+        ir_time = 1;
 
 //print_number(ir_time);
-        ir_timeout = IR_TIMEOUT;
-        
-        
-        if(!have_ir)
+    ir_timeout = IR_TIMEOUT;
+
+
+    if(!have_ir)
+    {
+        code_buffer[code_offset++] = ir_time;
+        if(code_offset >= CODE_SIZE)
         {
-            code_buffer[code_offset++] = ir_time;
-            if(code_offset >= CODE_SIZE)
-            {
 // end of code
 // search for the code
-	            uint8_t i, j;
+	        uint8_t i, j;
 // got complete code
-	            uint8_t got_it = 0;
-	            for(i = 0; i < TOTAL_CODES && !got_it; i++)
+	        uint8_t got_it = 0;
+	        for(i = 0; i < TOTAL_CODES && !got_it; i++)
 //	            for(i = 0; i < 5 && !got_it; i++)
+            {
+                const ir_code_t *code = &ir_codes[i];
+                const uint8_t *data = code->data;
+                got_it = 1;
+                for(j = 1; j < CODE_SIZE; j++)
                 {
-                    const ir_code_t *code = &ir_codes[i];
-                    const uint8_t *data = code->data;
-                    got_it = 1;
-// ignore 1st byte
-                    for(j = 1; j < CODE_SIZE; j++)
-                    {
 // print_number(data[j]);
 // print_text("=");
 // print_number(code_buffer[j]);
 // print_text("\n");
-                        if(data[j - 1] != code_buffer[j])
-                        {
-                            got_it = 0;
-                            break;
-                        }
-                    }
-
-                    if(got_it)
+                    if(data[j - 1] != code_buffer[j])
                     {
+                        got_it = 0;
+                        break;
+                    }
+                }
+
+
+                if(got_it)
+                {
+                    HANDLE_ENCODERS
 // print_text("i=");
 // print_number(i);
 // print_text("\n");
-					    have_ir = 1;
-                        repeat_delay = REPEAT_DELAY;
-					    ir_code = code->value;
-                        handle_ir_code();
-                    }
+					have_ir = 1;
+                    repeat_delay = REPEAT_DELAY;
+					ir_code = code->value;
+                    handle_ir_code();
                 }
+            }
 
-                if(!got_it)
-                {
-                    code_offset = 0;
-                }
+            if(!got_it)
+            {
+                code_offset = 0;
             }
         }
     }
 }
+
+#define HANDLE_IR \
+{ \
+/* IR timed out */ \
+    if(ir_timeout == 0) \
+    { \
+		code_offset = 0; \
+        if(have_ir) ir_stopped(); \
+    } \
+ \
+/* repeat IR code after 1st delay & motors are all in braking mode */ \
+    if(have_ir &&  \
+        repeat_delay == 0 && \
+        ir_code != POWER && \
+        ir_code != SET_PRESET) \
+    { \
+/* print_text("IR repeat\n"); */ \
+        repeat_delay = REPEAT_DELAY2; \
+        if(armed) repeating_code = ir_code; \
+        handle_ir_code(); \
+    } \
+ \
+    if(got_ir_int) \
+    { \
+        ir_interrupt(); \
+    } \
+}
+
+
+
+
 #endif // BOARD 0
 
 
@@ -1118,7 +1309,7 @@ void get_code3()
     status_packet[2] = tracking_state[BOARD].boundary;
     status_packet[3] = encoder_count;
     encoder_count = 0;
-    send_uart(status_packet, 4);
+    SEND_UART(status_packet, 4);
 // delay to let the UART switch directions
 //    status_delay = 0;
 //    want_status = 1;
@@ -1179,6 +1370,7 @@ void get_code1()
     if(uart_in == 0xff)
         receive_state = get_code2;
 }
+
 
 void main()
 {
@@ -1295,7 +1487,7 @@ void main()
 
 	while(1)
 	{
-		handle_serial();
+		HANDLE_SERIAL
 		if(have_uart_in)
 		{
 			have_uart_in = 0;
@@ -1325,12 +1517,12 @@ void main()
             if(polling_delay == 0)
             {
                 polling_delay = POLLING_DELAY;
-                uint8_t polling_packet[3];
+#ifdef ENABLE_POLLING
                 polling_packet[0] = 0xff;
                 polling_packet[1] = 0xa8 | polling_board;
                 polling_packet[2] = motor_master;
-                send_uart(polling_packet, 3);
-
+                SEND_UART(polling_packet, 3);
+#endif
 
                 if(polling_board == 2)
                     polling_board = 1;
@@ -1339,6 +1531,7 @@ void main()
             }
 
 // service the debug output in every tick we're not polling
+#ifdef ENABLE_DEBUG
             if(polling_delay != POLLING_DELAY)
             {
                 debug_counter++;
@@ -1350,6 +1543,7 @@ void main()
                 }
                 handle_debug();
             }
+#endif
 
             if(ir_timeout > 0) ir_timeout--;
 
@@ -1384,9 +1578,9 @@ void main()
 
         motor_state();
 
-        handle_ir();
+        HANDLE_IR
 
-        if(preset_state != 0)
+        if(preset_state != 0 && !MOTORS_TRACKING)
             preset_state();
 #else // BOARD 0
 
@@ -1397,7 +1591,9 @@ void main()
         {
             bitSet(TIFR0, TOV0);
 
+#ifdef ENABLE_DEBUG
             handle_debug();
+#endif
 
 // shut down if no packet received
             if(motor_timeout == 0)
@@ -1412,39 +1608,14 @@ void main()
 //                 else
 //                 {
 //                     want_status = 0;
-//                     send_uart(status_packet, 4);
+//                     SEND_UART(status_packet, 4);
 //                 }
 //             }
         }
 #endif // BOARD != 0
 
 
-        uint8_t current_encoder = PINC & 0b00001100;
-        if(current_encoder != prev_encoder)
-        {
-            if(current_encoder == 0b00001000 &&
-                prev_encoder == 0b00001100)
-            {
-                encoder_count++;
-            }
-            else
-            if(current_encoder == 0b00001100 &&
-                prev_encoder == 0b00001000)
-            {
-                encoder_count--;
-            }
-            prev_encoder = current_encoder;
-
-#if BOARD == 0
-            tracking_state[0].encoder += encoder_count * tracking_state[0].sign;
-            encoder_count = 0;
-#endif
-
-//             print_number(bitRead(PINC, 2));
-//             print_number(bitRead(PINC, 3));
-//             print_number(encoder_count);
-//             print_text("\n");
-        }
+        HANDLE_ENCODERS
 
 
 // boundary sensor        

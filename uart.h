@@ -26,6 +26,11 @@
 extern uint8_t uart_used;
 extern volatile uint8_t have_uart_in;
 extern volatile uint8_t uart_in;
+#define UART_SIZE 64
+extern uint8_t uart_buffer[UART_SIZE];
+extern uint8_t uart_used;
+extern uint8_t uart_write_ptr;
+extern uint8_t uart_read_ptr;
 
 void send_uart(uint8_t *text, uint8_t size);
 void print_text(char *text);
@@ -38,7 +43,51 @@ void init_serial();
 void print_byte(char c);
 void print_hex(uint8_t x);
 
+#define HANDLE_SERIAL \
+if(uart_used) \
+{ \
+/* enable transmit mode.  disable receive mode */ \
+    if(!bitRead(UCSR0B, TXEN0)) \
+    { \
+        bitSet(UCSR0B, TXEN0); \
+        bitClear(UCSR0B, RXEN0); \
+    } \
+ \
+ \
+	if(bitRead(UCSR0A, UDRE0))  \
+	{ \
+		bitSet(UCSR0A, UDRE0);  \
+		UDR0 = uart_buffer[uart_read_ptr++];  \
+		if(uart_read_ptr >= UART_SIZE) uart_read_ptr = 0;  \
+		uart_used--;  \
+	} \
+ \
+} \
+else \
+{ \
+/* disable transmit mode.  enable receive mode */ \
+    if(bitRead(UCSR0B, TXEN0)) \
+    { \
+/* last byte transmitted */ \
+        if(bitRead(UCSR0A, TXC0)) \
+        { \
+            bitSet(UCSR0A, TXC0); \
+            bitClear(UCSR0B, TXEN0); \
+            bitSet(UCSR0B, RXEN0); \
+        } \
+    } \
+}
 
+#define SEND_UART(text, size) \
+{ \
+	uint8_t i; \
+	for(i = 0; uart_used < UART_SIZE && i < size; i++) \
+	{ \
+		uart_buffer[uart_write_ptr++] = text[i]; \
+		uart_used++; \
+		if(uart_write_ptr >= UART_SIZE) uart_write_ptr = 0; \
+	} \
+}
 
 
 #endif

@@ -154,7 +154,7 @@ void main(int argc, char *argv[])
 {
     if(argc < 2)
     {
-        printf("Program the common motor controller\n");
+        printf("Program with single wire bootloader.\n");
         printf("Usage: program /dev/ttyUSB1 <hex file>\n");
         return;
     }

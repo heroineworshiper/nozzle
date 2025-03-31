@@ -46,7 +46,7 @@
 #define HOME2 5428
 
 // size of the table for pitch
-#define PITCH_STEPS 64
+#define PITCH_STEPS 128
 
 
 
